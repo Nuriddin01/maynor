@@ -1,49 +1,49 @@
 # Sleep Support Bot
 
-Sleep Support Bot is a production-ready MVP+ Telegram bot for sleep support and short recovery sessions. It helps users prepare for night sleep, take a daytime break, run a power nap flow, save wake check-ins, review history, see lightweight analytics, and manage alarms directly inside Telegram.
+Sleep Support Bot - это production-ready MVP+ Telegram-бот для поддержки сна и коротких восстановительных сессий. Он помогает пользователю подготовиться ко сну, сделать дневную паузу, пройти сценарий power nap, сохранить утренний чек-ин, посмотреть историю, увидеть простую аналитику и управлять будильниками прямо в Telegram.
 
-The bot is intentionally honest and safe:
+Бот сделан честно и безопасно:
 
-- no medical diagnoses
-- no claims about curing insomnia
-- no pseudo-science
-- soft, transparent heuristics instead of black-box recommendations
-- a repeated disclaimer where it matters:
+- не ставит медицинские диагнозы
+- не обещает вылечить бессонницу
+- не использует псевдонауку
+- использует мягкие и прозрачные эвристики вместо непрозрачных рекомендаций
+- в важных местах показывает дисклеймер:
   `Бот не заменяет врача. Если проблемы со сном стали постоянными или сильно мешают жизни, лучше обратиться к специалисту.`
 
-## Features
+## Возможности
 
-- Night sleep wind-down flow with adaptive scenarios:
+- Вечерний сценарий подготовки ко сну с адаптивными режимами:
   - `ultra_short_wind_down`
   - `short_wind_down`
   - `standard_wind_down`
   - `calm_night_protocol`
-- Day rest flow with:
+- Дневной отдых:
   - `recovery_break`
   - `short_day_rest`
   - `guided_nap_attempt`
   - `long_rest_session`
-- Dedicated `Power Nap 10-20 min` flow
-- Wake check-in after sleep
-- Sleep history
-- Stats for the last 7 days
-- Telegram alarm with:
-  - relative or exact-time scheduling
-  - random stop code
-  - limited repeated reminders
-  - restoration after bot restart
-- Settings:
-  - timezone
-  - profile language
-  - preferred audio
-  - white noise dislike toggle
-  - time format
-  - recommendation toggles
-- Premium screen with feature flags and stubs
-- Docker support
-- Unit tests
+- Отдельный сценарий `Power Nap 10-20 min`
+- Утренний чек-ин после сна
+- История сна
+- Статистика за последние 7 дней
+- Telegram-будильник:
+  - установка по относительному или точному времени
+  - случайный код для отключения
+  - ограниченное количество повторных напоминаний
+  - восстановление после перезапуска бота
+- Настройки:
+  - часовой пояс
+  - язык профиля
+  - предпочитаемое аудио
+  - переключатель неприязни к белому шуму
+  - формат времени
+  - включение и отключение рекомендаций
+- Экран Premium с feature flags и заглушками
+- Поддержка Docker
+- Unit-тесты
 
-## Stack
+## Стек
 
 - Python 3.12+
 - aiogram 3
@@ -55,7 +55,7 @@ The bot is intentionally honest and safe:
 - pytest / pytest-asyncio
 - Docker / docker compose
 
-## Project Structure
+## Структура проекта
 
 ```text
 sleep_support_bot/
@@ -81,30 +81,30 @@ sleep_support_bot/
   docker-compose.yml
   README.md
   main.py
-```
+````
 
-## How Recommendation Logic Works
+## Как работает логика рекомендаций
 
-The recommendation engine is an explicit heuristic system located in `app/recommendation_engine.py`.
+Рекомендательная логика находится в файле `app/recommendation_engine.py` и построена как явная эвристическая система.
 
-It takes into account:
+Она учитывает:
 
-- request type
-- how long the user slept last night
-- subjective sleep quality
-- current sleepiness
-- current stress
-- free time available
-- last 7 days of history
-- audio preferences
-- white noise dislike
-- preferred mode intent for day rest
+* тип запроса
+* сколько пользователь спал прошлой ночью
+* субъективное качество сна
+* текущую сонливость
+* текущий уровень стресса
+* доступное свободное время
+* историю за последние 7 дней
+* аудиопредпочтения
+* неприязнь к белому шуму
+* желаемый режим дневного отдыха
 
-The logic is configurable through `app/constants.py`.
+Логика настраивается через файл `app/constants.py`.
 
-## Local Run
+## Локальный запуск
 
-### 1. Create environment file
+### 1. Создать файл окружения
 
 ```bash
 cp .env.example .env
@@ -116,9 +116,9 @@ Windows PowerShell:
 Copy-Item .env.example .env
 ```
 
-Then set a real bot token in `.env`.
+Затем нужно указать реальный токен бота в `.env`.
 
-### 2. Create virtual environment
+### 2. Создать виртуальное окружение
 
 ```bash
 python -m venv .venv
@@ -132,47 +132,47 @@ python -m venv .venv
 .venv\Scripts\Activate.ps1
 ```
 
-### 3. Install dependencies
+### 3. Установить зависимости
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 4. Run the bot
+### 4. Запустить бота
 
 ```bash
 python main.py
 ```
 
-The SQLite database will be created under `./data/`.
+SQLite-база будет создана в папке `./data/`.
 
-## Run With Docker
+## Запуск через Docker
 
-### 1. Prepare `.env`
+### 1. Подготовить `.env`
 
 ```bash
 cp .env.example .env
 ```
 
-### 2. Start the project
+### 2. Запустить проект
 
 ```bash
 docker compose up --build
 ```
 
-The bot container mounts `./data` for persistent SQLite storage.
+Контейнер бота подключает папку `./data` для постоянного хранения SQLite-базы.
 
-## Tests
+## Тесты
 
-Run all tests:
+Запуск всех тестов:
 
 ```bash
 pytest
 ```
 
-## Environment Variables
+## Переменные окружения
 
-Example `.env`:
+Пример `.env`:
 
 ```env
 SSB_TELEGRAM_BOT_TOKEN=123456:replace_me
@@ -186,17 +186,20 @@ SSB_DEFAULT_LANGUAGE=ru
 SSB_DEFAULT_TIME_FORMAT=24h
 ```
 
-## Notes About Safety
+## Замечания о безопасности
 
-- The bot is not a medical device.
-- It does not diagnose or prescribe treatment.
-- Recommendations are framed as gentle support, not medical guidance.
-- The recurring disclaimer is part of product copy on purpose.
+* Бот не является медицинским устройством.
+* Он не ставит диагнозы и не назначает лечение.
+* Рекомендации подаются как мягкая поддержка, а не как медицинские указания.
+* Повторяющийся дисклеймер намеренно встроен в продуктовый текст.
 
-## Extension Ideas
+## Идеи для расширения
 
-- weekly scheduled insights
-- calendar and deadline-aware sleep planning
-- deeper personalization with more historical weighting
-- richer multilingual UI
-- structured onboarding and habit tracking
+* еженедельные запланированные инсайты
+* планирование сна с учетом календаря и дедлайнов
+* более глубокая персонализация с большим весом истории
+* расширенный мультиязычный интерфейс
+* структурированный onboarding и трекинг привычек
+
+```
+```
