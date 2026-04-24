@@ -83,7 +83,7 @@ class BotScheduler:
                 return
 
             attempt = alarm.repeat_attempts + 1
-            remaining = self.settings.max_alarm_repeat_attempts - attempt
+            remaining = alarm.max_repeat_attempts - attempt
             suffix = (
                 "Это последнее напоминание."
                 if remaining <= 0
@@ -102,7 +102,7 @@ class BotScheduler:
             )
 
             alarm.repeat_attempts = attempt
-            if attempt >= self.settings.max_alarm_repeat_attempts:
+            if attempt >= alarm.max_repeat_attempts:
                 alarm.is_active = False
                 self.remove_alarm(alarm_id)
             else:

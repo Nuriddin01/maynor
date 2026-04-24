@@ -13,16 +13,9 @@ class UserService:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
 
-    async def get_or_create_user(
-        self,
-        session: AsyncSession,
-        telegram_id: int,
-        name: str | None,
-    ) -> User:
+    async def get_or_create_user(self, session: AsyncSession, telegram_id: int, name: str | None) -> User:
         result = await session.execute(
-            select(User)
-            .options(selectinload(User.preferences))
-            .where(User.telegram_id == telegram_id)
+            select(User).options(selectinload(User.preferences)).where(User.telegram_id == telegram_id)
         )
         user = result.scalar_one_or_none()
         if user:
@@ -49,17 +42,11 @@ class UserService:
         )
         await session.commit()
         await session.refresh(user)
-        result = await session.execute(
-            select(User)
-            .options(selectinload(User.preferences))
-            .where(User.id == user.id)
-        )
-        return result.scalar_one()
+        return user
 
     async def ensure_preferences(self, session: AsyncSession, user: User) -> UserPreference:
         if user.preferences is not None:
             return user.preferences
-
         preference = UserPreference(
             user_id=user.id,
             preferred_audio="silence",
@@ -89,6 +76,7 @@ class UserService:
         likes_forest: bool | None = None,
         likes_silence: bool | None = None,
         default_nap_minutes: int | None = None,
+        reminders_enabled: bool | None = None,
     ) -> None:
         preference = await self.ensure_preferences(session, user)
         if preferred_audio is not None and preferred_audio in AUDIO_TYPES:
@@ -103,24 +91,14 @@ class UserService:
             preference.likes_silence = likes_silence
         if default_nap_minutes is not None:
             preference.default_nap_minutes = default_nap_minutes
+        if reminders_enabled is not None:
+            preference.reminders_enabled = reminders_enabled
         await session.commit()
 
-    async def update_toggle_preferences(
-        self,
-        session: AsyncSession,
-        user: User,
-        *,
-        time_format: str | None = None,
-        enable_sleep_hygiene_tips: bool | None = None,
-        enable_audio_recommendations: bool | None = None,
-    ) -> None:
+    async def update_toggle_preferences(self, session: AsyncSession, user: User, *, time_format: str | None = None) -> None:
         preference = await self.ensure_preferences(session, user)
         if time_format is not None:
             preference.time_format = time_format
-        if enable_sleep_hygiene_tips is not None:
-            preference.enable_sleep_hygiene_tips = enable_sleep_hygiene_tips
-        if enable_audio_recommendations is not None:
-            preference.enable_audio_recommendations = enable_audio_recommendations
         await session.commit()
 
     async def settings_overview(self, session: AsyncSession, user: User) -> dict:
@@ -130,7 +108,8 @@ class UserService:
             "language": user.preferred_language,
             "preferred_audio": preference.preferred_audio or "не выбрано",
             "time_format": preference.time_format,
-            "sleep_hygiene_tips": preference.enable_sleep_hygiene_tips,
-            "audio_recommendations": preference.enable_audio_recommendations,
+            "dislikes_white_noise": preference.dislikes_white_noise,
+            "default_nap_minutes": preference.default_nap_minutes,
+            "reminders_enabled": preference.reminders_enabled,
             "premium_status": user.premium_status,
         }

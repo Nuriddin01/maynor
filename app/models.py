@@ -22,6 +22,7 @@ class User(Base):
     preferred_language: Mapped[str] = mapped_column(String(10), default="ru")
     premium_status: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
     sleep_entries: Mapped[list["SleepEntry"]] = relationship(back_populates="user", cascade="all, delete-orphan")
     alarms: Mapped[list["Alarm"]] = relationship(back_populates="user", cascade="all, delete-orphan")
@@ -35,6 +36,7 @@ class User(Base):
         back_populates="user",
         cascade="all, delete-orphan",
     )
+    audit_logs: Mapped[list["AuditLog"]] = relationship(back_populates="user", cascade="all, delete-orphan")
 
 
 class SleepEntry(Base):
@@ -64,6 +66,7 @@ class Alarm(Base):
     alarm_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     code: Mapped[str] = mapped_column(String(20))
     repeat_attempts: Mapped[int] = mapped_column(Integer, default=0)
+    max_repeat_attempts: Mapped[int] = mapped_column(Integer, default=3)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     stop_confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -83,9 +86,8 @@ class UserPreference(Base):
     likes_forest: Mapped[bool] = mapped_column(Boolean, default=False)
     likes_silence: Mapped[bool] = mapped_column(Boolean, default=True)
     default_nap_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reminders_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     time_format: Mapped[str] = mapped_column(String(10), default="24h")
-    enable_sleep_hygiene_tips: Mapped[bool] = mapped_column(Boolean, default=True)
-    enable_audio_recommendations: Mapped[bool] = mapped_column(Boolean, default=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
     user: Mapped[User] = relationship(back_populates="preferences")
@@ -107,3 +109,15 @@ class SessionRequest(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     user: Mapped[User] = relationship(back_populates="session_requests")
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    event_name: Mapped[str] = mapped_column(String(80), index=True)
+    details_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+    user: Mapped[User | None] = relationship(back_populates="audit_logs")

@@ -23,6 +23,7 @@ class RecommendationRequest(BaseModel):
     current_sleepiness: int | None = Field(default=None, ge=1, le=5)
     current_stress: int | None = Field(default=None, ge=1, le=5)
     free_time_minutes: int = Field(ge=0, le=720)
+    desired_mode: str | None = None
     history: list[HistoricalSignal] = Field(default_factory=list)
     preferred_audio: str | None = None
     mode_preference: str | None = None
@@ -40,11 +41,8 @@ class RecommendationRequest(BaseModel):
 class RecommendationOutput(BaseModel):
     recommended_mode: str
     recommended_duration_minutes: int | None
+    recommended_steps: list[str]
     explanation_for_user: str
-    steps: list[str]
-    breathing_practice: str
-    relaxation_tip: str
-    sleep_hygiene_tip: str
     optional_audio_type: str | None
     suggest_alarm: bool
     confidence_label: str
@@ -73,25 +71,15 @@ class SleepEntryCreate(BaseModel):
     notes: str | None = Field(default=None, max_length=1000)
 
 
-class SleepHistoryItem(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    mode: str
-    duration_minutes: int
-    subjective_sleep_quality_1_5: int | None = None
-    felt_after_waking_1_5: int | None = None
-    helpfulness_1_5: int | None = None
-    created_at: datetime
-
-
 class StatsSummary(BaseModel):
     average_duration_minutes_last_7_days: float | None = None
-    average_sleep_quality_last_7_days: float | None = None
-    average_felt_after_last_7_days: float | None = None
+    average_duration_minutes_last_30_days: float | None = None
+    average_sleep_quality_last_30_days: float | None = None
+    average_felt_after_last_30_days: float | None = None
     most_used_modes: list[str] = Field(default_factory=list)
     most_helpful_modes: list[str] = Field(default_factory=list)
     pattern_insights: list[str] = Field(default_factory=list)
-    entries_count_last_7_days: int = 0
+    entries_count_last_30_days: int = 0
 
 
 class AlarmCreateResult(BaseModel):
@@ -104,3 +92,9 @@ class AlarmStopResult(BaseModel):
     stopped: bool
     reason: str
     alarm_id: int | None = None
+
+
+class EventRecord(BaseModel):
+    event_name: str
+    user_id: int | None = None
+    details: dict = Field(default_factory=dict)

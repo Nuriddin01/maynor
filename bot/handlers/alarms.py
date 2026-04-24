@@ -175,7 +175,25 @@ async def handle_alarm_clock_time(
     )
 
 
-@router.message(lambda message: (message.text or "").strip().isdigit() and len((message.text or "").strip()) == 4)
+
+
+@router.message(Command("stop_alarm"))
+async def stop_alarm_command(
+    message: Message,
+    session: AsyncSession,
+    db_user: User,
+    alarm_service: AlarmService,
+) -> None:
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) != 2:
+        await message.answer("Используйте формат: /stop_alarm CODE")
+        return
+    result = await alarm_service.confirm_alarm_stop(session, db_user.telegram_id, parts[1].strip())
+    if result.stopped:
+        await message.answer("Будильник остановлен.", reply_markup=main_menu_keyboard())
+    else:
+        await message.answer("Код не подошел или активный будильник не найден.", reply_markup=main_menu_keyboard())
+@router.message(lambda message: (message.text or "").strip().isdigit() and len((message.text or "").strip()) in {4,5,6})
 async def handle_alarm_stop_code(
     message: Message,
     session: AsyncSession,

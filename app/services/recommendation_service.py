@@ -10,25 +10,14 @@ from app.services.user_service import UserService
 
 
 class RecommendationService:
-    def __init__(
-        self,
-        engine: RecommendationEngine,
-        sleep_service: SleepService,
-        user_service: UserService,
-    ) -> None:
+    def __init__(self, engine: RecommendationEngine, sleep_service: SleepService, user_service: UserService) -> None:
         self.engine = engine
         self.sleep_service = sleep_service
         self.user_service = user_service
 
-    async def build_for_user(
-        self,
-        session: AsyncSession,
-        user: User,
-        payload: RecommendationRequest,
-    ) -> RecommendationOutput:
-        history = await self.sleep_service.get_history_for_recommendation(session, user.id, days=7)
+    async def build_for_user(self, session: AsyncSession, user: User, payload: RecommendationRequest) -> RecommendationOutput:
+        history = await self.sleep_service.get_history_for_recommendation(session, user.id, days=30)
         preference = await self.user_service.ensure_preferences(session, user)
-
         enriched_payload = payload.model_copy(
             update={
                 "history": history,
@@ -39,9 +28,4 @@ class RecommendationService:
                 "likes_silence": preference.likes_silence,
             }
         )
-        recommendation = self.engine.build_recommendation(enriched_payload)
-        if not preference.enable_audio_recommendations:
-            recommendation = recommendation.model_copy(update={"optional_audio_type": None})
-        if not preference.enable_sleep_hygiene_tips:
-            recommendation = recommendation.model_copy(update={"sleep_hygiene_tip": "Совет по гигиене сна отключен в настройках."})
-        return recommendation
+        return self.engine.build_recommendation(enriched_payload)
