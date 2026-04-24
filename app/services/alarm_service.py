@@ -70,6 +70,7 @@ class AlarmService:
             alarm_time=minutes_from_now_to_utc(minutes),
             code=self.generate_code(self.settings.alarm_code_length),
             repeat_attempts=0,
+            max_repeat_attempts=self.settings.max_alarm_repeat_attempts,
             is_active=True,
         )
         session.add(alarm)
@@ -93,6 +94,7 @@ class AlarmService:
             alarm_time=local_clock_to_utc(clock_value, user.timezone),
             code=self.generate_code(self.settings.alarm_code_length),
             repeat_attempts=0,
+            max_repeat_attempts=self.settings.max_alarm_repeat_attempts,
             is_active=True,
         )
         session.add(alarm)

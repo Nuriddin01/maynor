@@ -6,56 +6,38 @@ from app.utils.time_utils import format_datetime_for_user, format_minutes
 
 MENU_READY_TEXT = "Готово. Возвращаю вас в главное меню."
 
-WELCOME_TEXT = (
-    "Sleep Support Bot помогает мягко подготовиться ко сну, сделать короткий дневной отдых, "
-    "поставить будильник и отслеживать, что реально помогает именно вам.\n\n"
-    "Я не ставлю диагнозы и не обещаю лечение. Здесь только бережные, понятные и безопасные рекомендации.\n\n"
-    f"{DISCLAIMER_TEXT}"
-)
-
-HELP_TEXT = (
-    "Что умеет бот:\n"
-    "• подсказывает вечерний сценарий для засыпания\n"
-    "• помогает с дневным отдыхом и power nap\n"
-    "• сохраняет check-in после сна\n"
-    "• показывает историю и простую статистику\n"
-    "• ставит будильники внутри Telegram с кодом остановки\n"
-    "• хранит базовые настройки аудио, языка и часового пояса\n\n"
-    "Как пользоваться:\n"
-    "1. Выберите режим в главном меню.\n"
-    "2. Ответьте на короткие вопросы.\n"
-    "3. Получите сценарий и при необходимости будильник.\n"
-    "4. После сна заполните check-in, чтобы улучшить персонализацию.\n\n"
-    f"{DISCLAIMER_TEXT}"
-)
-
 
 def build_welcome_text(name: str | None) -> str:
-    if name:
-        return f"Привет, {name}.\n\n{WELCOME_TEXT}"
-    return f"Привет.\n\n{WELCOME_TEXT}"
+    intro = "Sleep Support Bot — wellbeing-сервис для мягкой поддержки сна и восстановления."
+    base = (
+        f"{intro}\n\n"
+        "Что умеет:\n"
+        "• вечерние и дневные сценарии\n"
+        "• отдельный режим Power Nap\n"
+        "• check-in после сна\n"
+        "• история, статистика и будильник с кодом\n\n"
+        f"{DISCLAIMER_TEXT}"
+    )
+    return f"Привет, {name}.\n\n{base}" if name else f"Привет.\n\n{base}"
+
+
+HELP_TEXT = (
+    "Команды: /start /night /day /power_nap /wake /history /stats /alarm /settings /premium /help\n\n"
+    "Старайтесь отвечать цифрами в указанном диапазоне. В любом сценарии можно нажать «Назад» или «В меню».\n\n"
+    f"{DISCLAIMER_TEXT}"
+)
 
 
 def render_recommendation(title: str, recommendation: RecommendationOutput) -> str:
-    steps = "\n".join(f"• {step}" for step in recommendation.steps)
-    audio_line = recommendation.optional_audio_type or "не обязательно"
-    duration_line = (
-        f"{recommendation.recommended_duration_minutes} мин"
-        if recommendation.recommended_duration_minutes is not None
-        else "без жесткой длительности"
-    )
+    steps = "\n".join(f"• {step}" for step in recommendation.recommended_steps)
     return (
         f"{title}\n\n"
         f"Режим: {MODE_DISPLAY_NAMES.get(recommendation.recommended_mode, recommendation.recommended_mode)}\n"
-        f"Рекомендуемое окно: {duration_line}\n"
-        f"Уверенность: {recommendation.confidence_label}\n\n"
+        f"Длительность: {recommendation.recommended_duration_minutes or 'гибко'} мин\n"
+        f"Уверенность: {recommendation.confidence_label}\n"
+        f"Аудио: {recommendation.optional_audio_type or 'по желанию'}\n\n"
         f"{recommendation.explanation_for_user}\n\n"
-        "Шаги:\n"
-        f"{steps}\n\n"
-        f"Дыхательная практика: {recommendation.breathing_practice}\n"
-        f"Расслабление: {recommendation.relaxation_tip}\n"
-        f"Sleep hygiene: {recommendation.sleep_hygiene_tip}\n"
-        f"Аудио: {audio_line}\n"
+        f"Шаги:\n{steps}\n\n"
         f"Дальше: {recommendation.followup_hint}\n\n"
         f"{DISCLAIMER_TEXT}"
     )
@@ -63,65 +45,53 @@ def render_recommendation(title: str, recommendation: RecommendationOutput) -> s
 
 def render_history(entries: list) -> str:
     if not entries:
-        return (
-            "История пока пустая. Начните с любого сценария и сохраните check-in после сна, "
-            "чтобы здесь появились записи."
-        )
-
-    lines = ["Последние записи:\n"]
+        return "История пока пустая."
+    lines = ["Последние записи:"]
     for entry in entries:
         lines.append(
-            (
-                f"• {entry.created_at.strftime('%d.%m %H:%M')} | "
-                f"{MODE_DISPLAY_NAMES.get(entry.mode, entry.mode)} | "
-                f"{format_minutes(entry.duration_minutes)} | "
-                f"качество: {entry.subjective_sleep_quality_1_5 or '—'} | "
-                f"самочувствие: {entry.felt_after_waking_1_5 or '—'}"
-            )
+            f"• {entry.created_at:%d.%m %H:%M} | {MODE_DISPLAY_NAMES.get(entry.mode, entry.mode)} | "
+            f"{format_minutes(entry.duration_minutes)} | качество: {entry.subjective_sleep_quality_1_5 or '—'} | "
+            f"после пробуждения: {entry.felt_after_waking_1_5 or '—'}"
         )
-    lines.append(f"\n{DISCLAIMER_TEXT}")
+        if entry.notes:
+            lines.append(f"  заметка: {entry.notes}")
     return "\n".join(lines)
 
 
 def render_stats(summary: StatsSummary) -> str:
-    if summary.entries_count_last_7_days == 0:
-        return summary.pattern_insights[0]
-
-    used_modes = ", ".join(summary.most_used_modes) if summary.most_used_modes else "пока нет"
-    helpful_modes = ", ".join(summary.most_helpful_modes) if summary.most_helpful_modes else "пока нет"
-    insights = "\n".join(f"• {insight}" for insight in summary.pattern_insights)
+    if summary.entries_count_last_30_days == 0:
+        return "Данных пока нет."
+    insights = "\n".join(f"• {item}" for item in summary.pattern_insights)
     return (
-        "Статистика за последние 7 дней:\n\n"
-        f"Средняя длительность: {format_minutes(int(summary.average_duration_minutes_last_7_days or 0))}\n"
-        f"Среднее качество сна: {summary.average_sleep_quality_last_7_days or '—'}\n"
-        f"Среднее самочувствие после пробуждения: {summary.average_felt_after_last_7_days or '—'}\n"
-        f"Самые частые режимы: {used_modes}\n"
-        f"Самые полезные режимы: {helpful_modes}\n\n"
-        "Наблюдения:\n"
-        f"{insights}\n\n"
-        f"{DISCLAIMER_TEXT}"
+        "Статистика:\n\n"
+        f"Средняя длительность за 7 дней: {summary.average_duration_minutes_last_7_days or '—'} мин\n"
+        f"Средняя длительность за 30 дней: {summary.average_duration_minutes_last_30_days or '—'} мин\n"
+        f"Среднее качество сна: {summary.average_sleep_quality_last_30_days or '—'}\n"
+        f"Среднее состояние после пробуждения: {summary.average_felt_after_last_30_days or '—'}\n"
+        f"Частые режимы: {', '.join(summary.most_used_modes) or '—'}\n"
+        f"Полезные режимы: {', '.join(summary.most_helpful_modes) or '—'}\n\n"
+        f"Выводы:\n{insights}\n\n{DISCLAIMER_TEXT}"
     )
 
 
 def render_settings(overview: dict) -> str:
     return (
-        "Текущие настройки:\n\n"
-        f"Часовой пояс: {overview['timezone']}\n"
-        f"Язык профиля: {overview['language']}\n"
-        f"Предпочитаемое аудио: {overview['preferred_audio']}\n"
-        f"Формат времени: {overview['time_format']}\n"
-        f"Sleep hygiene советы: {'вкл' if overview['sleep_hygiene_tips'] else 'выкл'}\n"
-        f"Аудио-рекомендации: {'вкл' if overview['audio_recommendations'] else 'выкл'}\n"
-        f"Premium: {'активен' if overview['premium_status'] else 'не активен'}\n\n"
-        "Выберите, что хотите изменить."
+        "Настройки:\n\n"
+        f"• Таймзона: {overview['timezone']}\n"
+        f"• Язык: {overview['language']}\n"
+        f"• Аудио: {overview['preferred_audio']}\n"
+        f"• dislike white noise: {'да' if overview['dislikes_white_noise'] else 'нет'}\n"
+        f"• default nap: {overview['default_nap_minutes'] or 'не задан'}\n"
+        f"• reminders: {'вкл' if overview['reminders_enabled'] else 'выкл'}\n"
+        f"• Формат времени: {overview['time_format']}\n"
+        f"• Premium: {'активен' if overview['premium_status'] else 'не активен'}"
     )
 
 
 def render_alarm_created(alarm_time, timezone_name: str, time_format: str, code: str) -> str:
     return (
-        "Будильник установлен.\n\n"
-        f"Когда сработает: {format_datetime_for_user(alarm_time, timezone_name, time_format)}\n"
+        "Будильник установлен.\n"
+        f"Время: {format_datetime_for_user(alarm_time, timezone_name, time_format)}\n"
         f"Код остановки: {code}\n"
-        "Когда будильник сработает, я попрошу ввести этот код в чат.\n\n"
-        f"{DISCLAIMER_TEXT}"
+        "Для выключения отправьте: /stop_alarm КОД"
     )

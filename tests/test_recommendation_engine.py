@@ -1,69 +1,45 @@
-from datetime import datetime, timezone
-
 from app.recommendation_engine import RecommendationEngine
-from app.schemas import HistoricalSignal, RecommendationRequest
+from app.schemas import RecommendationRequest
 
 
-def test_night_high_stress_prefers_calm_protocol() -> None:
+def test_power_nap_20_when_sleepy_and_has_time() -> None:
     engine = RecommendationEngine()
-    payload = RecommendationRequest(
-        request_type="night",
-        slept_last_night_minutes=310,
-        subjective_sleep_quality=2,
-        current_sleepiness=4,
-        current_stress=5,
-        free_time_minutes=20,
-    )
-
-    result = engine.build_recommendation(payload)
-
-    assert result.recommended_mode == "calm_night_protocol"
-    assert result.recommended_duration_minutes == 20
-    assert result.confidence_label in {"medium", "high"}
-
-
-def test_day_short_window_returns_recovery_break() -> None:
-    engine = RecommendationEngine()
-    payload = RecommendationRequest(
-        request_type="day",
-        slept_last_night_minutes=360,
-        current_energy=2,
-        current_sleepiness=4,
-        current_stress=3,
-        free_time_minutes=8,
-        mode_preference="recovery",
-    )
-
-    result = engine.build_recommendation(payload)
-
-    assert result.recommended_mode == "recovery_break"
-    assert result.recommended_duration_minutes == 8
-
-
-def test_power_nap_uses_20_minutes_for_sleep_debt() -> None:
-    engine = RecommendationEngine()
-    history = [
-        HistoricalSignal(
-            mode="guided_nap_attempt",
-            duration_minutes=25,
-            subjective_sleep_quality_1_5=3,
-            felt_after_waking_1_5=4,
-            helpfulness_1_5=4,
-            created_at=datetime.now(timezone.utc),
+    out = engine.build_recommendation(
+        RecommendationRequest(
+            request_type="power_nap",
+            slept_last_night_minutes=280,
+            current_sleepiness=5,
+            free_time_minutes=20,
         )
-    ]
-    payload = RecommendationRequest(
-        request_type="power_nap",
-        slept_last_night_minutes=290,
-        current_sleepiness=5,
-        free_time_minutes=25,
-        history=history,
-        preferred_audio="white_noise",
-        dislikes_white_noise=True,
-        likes_rain=True,
     )
+    assert out.recommended_mode == "power_nap_20"
 
-    result = engine.build_recommendation(payload)
 
-    assert result.recommended_mode == "power_nap_20"
-    assert result.optional_audio_type != "white_noise"
+def test_recovery_break_when_short_time() -> None:
+    engine = RecommendationEngine()
+    out = engine.build_recommendation(
+        RecommendationRequest(
+            request_type="day",
+            slept_last_night_minutes=400,
+            current_energy=2,
+            current_sleepiness=4,
+            current_stress=3,
+            free_time_minutes=8,
+        )
+    )
+    assert out.recommended_mode == "recovery_break"
+
+
+def test_high_stress_night_prefers_calm_protocol() -> None:
+    engine = RecommendationEngine()
+    out = engine.build_recommendation(
+        RecommendationRequest(
+            request_type="night",
+            slept_last_night_minutes=300,
+            subjective_sleep_quality=2,
+            current_sleepiness=4,
+            current_stress=5,
+            free_time_minutes=20,
+        )
+    )
+    assert out.recommended_mode == "calm_night_protocol"

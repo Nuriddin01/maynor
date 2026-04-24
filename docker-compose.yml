@@ -1,7 +1,6 @@
 services:
   bot:
     build: .
-    container_name: sleep_support_bot
     env_file:
       - .env
     volumes:

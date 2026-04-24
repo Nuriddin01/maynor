@@ -37,12 +37,8 @@ def settings_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="Аудио", callback_data="settings:audio"),
                 InlineKeyboardButton(text="Формат времени", callback_data="settings:timeformat"),
             ],
-            [
-                InlineKeyboardButton(text="Toggle hygiene tips", callback_data="settings:toggle:hygiene"),
-            ],
-            [
-                InlineKeyboardButton(text="Toggle audio tips", callback_data="settings:toggle:audio"),
-            ],
+            [InlineKeyboardButton(text="Reminders on/off", callback_data="settings:toggle:reminders")],
+            [InlineKeyboardButton(text="Default nap 10", callback_data="settings:nap:set:10"), InlineKeyboardButton(text="Default nap 20", callback_data="settings:nap:set:20")],
             [InlineKeyboardButton(text="Обновить экран", callback_data="settings:refresh")],
         ]
     )

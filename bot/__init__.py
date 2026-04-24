@@ -15,6 +15,7 @@ from bot.handlers.start import router as start_router
 from bot.handlers.stats import router as stats_router
 from bot.handlers.wake_checkin import router as wake_router
 from bot.middlewares.db import DbSessionMiddleware
+from bot.middlewares.user_context import UserContextMiddleware
 
 
 def build_dispatcher(
@@ -22,6 +23,7 @@ def build_dispatcher(
     user_service: UserService,
 ) -> Dispatcher:
     dispatcher = Dispatcher(storage=MemoryStorage())
+    dispatcher.update.middleware(UserContextMiddleware())
     dispatcher.update.middleware(DbSessionMiddleware(session_factory, user_service))
 
     dispatcher.include_router(start_router)

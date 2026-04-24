@@ -18,7 +18,7 @@ from bot.keyboards.inline import (
     time_format_keyboard,
 )
 from bot.keyboards.main import main_menu_keyboard, navigation_keyboard
-from bot.states.alarm import SettingsFlow
+from bot.states.settings import SettingsFlow
 from bot.texts import common as common_texts
 from bot.texts import errors
 
@@ -197,33 +197,32 @@ async def set_time_format(
     await callback.answer("Формат времени обновлен")
 
 
-@router.callback_query(F.data == "settings:toggle:hygiene")
-async def toggle_hygiene(
+
+
+@router.callback_query(F.data == "settings:toggle:reminders")
+async def toggle_reminders(
     callback: CallbackQuery,
     session: AsyncSession,
     db_user: User,
     user_service: UserService,
 ) -> None:
-    await user_service.update_toggle_preferences(
+    await user_service.update_audio_preferences(
         session,
         db_user,
-        enable_sleep_hygiene_tips=not db_user.preferences.enable_sleep_hygiene_tips,
+        reminders_enabled=not db_user.preferences.reminders_enabled,
     )
     await show_settings_screen(callback.message, session, db_user, user_service)
-    await callback.answer("Настройка обновлена")
+    await callback.answer("Reminders обновлены")
 
 
-@router.callback_query(F.data == "settings:toggle:audio")
-async def toggle_audio_recommendations(
+@router.callback_query(F.data.startswith("settings:nap:set:"))
+async def set_default_nap(
     callback: CallbackQuery,
     session: AsyncSession,
     db_user: User,
     user_service: UserService,
 ) -> None:
-    await user_service.update_toggle_preferences(
-        session,
-        db_user,
-        enable_audio_recommendations=not db_user.preferences.enable_audio_recommendations,
-    )
+    minutes = int(callback.data.split(":")[-1])
+    await user_service.update_audio_preferences(session, db_user, default_nap_minutes=minutes)
     await show_settings_screen(callback.message, session, db_user, user_service)
-    await callback.answer("Настройка обновлена")
+    await callback.answer("Default nap сохранен")
