@@ -394,7 +394,7 @@ async def run_aiogram_bot() -> None:
     bot = Bot(token=settings.telegram_bot_token)
     dispatcher = Dispatcher()
     dispatcher.include_router(router)
-    await dispatcher.start_polling(bot)
+    await dispatcher.start_polling(bot, handle_signals=False)
 
 
 def _summary_text(summary: object) -> str:
