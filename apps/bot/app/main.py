@@ -7,11 +7,12 @@ from uuid import uuid4
 
 from apps.bot.app.local_bot import LocalBotSession
 from apps.bot.app.texts import CONSENT_TEXT, MAIN_MENU, recommendation_text
-from packages.analytics.events import AnalyticsEventName
 from packages.billing.plans import PLANS
 from packages.core.config import get_settings
 from packages.core.logging import configure_logging
 from packages.domain.models import (
+  AlarmStatus,
+  AnalyticsEventName,
   AudioType,
   BillingProviderName,
   PaymentIntent,
@@ -104,6 +105,14 @@ async def run_aiogram_bot() -> None:
       resize_keyboard=True,
     )
 
+  def cancel_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+      keyboard=[
+        [KeyboardButton(text="В меню"), KeyboardButton(text="Отменить сценарий")],
+      ],
+      resize_keyboard=True,
+    )
+
   def scale_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
       keyboard=[
@@ -114,14 +123,6 @@ async def run_aiogram_bot() -> None:
           KeyboardButton(text="4"),
           KeyboardButton(text="5"),
         ],
-        [KeyboardButton(text="В меню"), KeyboardButton(text="Отменить сценарий")],
-      ],
-      resize_keyboard=True,
-    )
-
-  def cancel_keyboard() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-      keyboard=[
         [KeyboardButton(text="В меню"), KeyboardButton(text="Отменить сценарий")],
       ],
       resize_keyboard=True,
@@ -184,6 +185,34 @@ async def run_aiogram_bot() -> None:
     except Exception:
       return user.preferences.wake_time is not None
 
+  def get_alarm_items() -> list:
+    alarm_store = services.alarms._store
+
+    if hasattr(alarm_store, "all"):
+      return list(alarm_store.all())
+
+    return list(getattr(alarm_store, "_items", {}).values())
+
+  def dismiss_latest_alarm_for_user(user_id, code: str | None = None):
+    active_alarms = [
+      alarm
+      for alarm in get_alarm_items()
+      if alarm.user_id == user_id
+      and alarm.status in {AlarmStatus.SCHEDULED, AlarmStatus.FIRING}
+      and (code is None or alarm.dismiss_code == code)
+    ]
+
+    if not active_alarms:
+      return None
+
+    active_alarms.sort(key=lambda alarm: alarm.due_at, reverse=True)
+    alarm = active_alarms[0]
+
+    try:
+      return services.alarms.dismiss(alarm.id, code=code)
+    except ValueError:
+      return None
+
   async def send_premium_invoice(message: Message, plan_code: str) -> None:
     if plan_code not in STAR_PLANS:
       await message.answer("Тариф не найден. Вернись в меню и попробуй снова.", reply_markup=menu_keyboard())
@@ -220,19 +249,6 @@ async def run_aiogram_bot() -> None:
   ) -> Subscription:
     now = datetime.now(timezone.utc)
     plan = STAR_PLANS[plan_code]
-
-    confirm_method = getattr(services.billing, "confirm_telegram_stars_payment", None)
-    if callable(confirm_method):
-      return confirm_method(
-        user_id=user_id,
-        plan_code=plan_code,
-        idempotency_key=idempotency_key,
-        amount_minor=amount_minor,
-        currency=currency,
-        telegram_payment_charge_id=telegram_payment_charge_id,
-        now=now,
-      )
-
     store = services.billing._store
 
     existing = store.get_payment(idempotency_key)
@@ -282,8 +298,34 @@ async def run_aiogram_bot() -> None:
   @router.message(F.text.startswith("/"))
   async def unknown_command(message: Message, state: FSMContext) -> None:
     await state.clear()
+    await message.answer("Я не знаю такую команду. Вернул тебя в главное меню.", reply_markup=menu_keyboard())
+
+  @router.message(F.text.regexp(r"^\d{4}$"))
+  async def dismiss_alarm_by_code(message: Message) -> None:
+    user = services.store.upsert_user(
+      message.from_user.id,
+      message.from_user.username if message.from_user else None,
+    )
+
+    code = (message.text or "").strip()
+    alarm = dismiss_latest_alarm_for_user(user.id, code=code)
+
+    if alarm is None:
+      await message.answer(
+        "Не нашёл активный будильник с таким кодом. Проверь код или нажми «✅ Я проснулся».",
+        reply_markup=menu_keyboard(),
+      )
+      return
+
+    services.analytics.track(
+      AnalyticsEventName.ALARM_DISMISSED,
+      user.id,
+      {"alarm_id": str(alarm.id), "source": "telegram_code"},
+    )
+
     await message.answer(
-      "Я не знаю такую команду. Вернул тебя в главное меню.",
+      "Будильник отключён ✅\n\n"
+      "Когда будешь готов, нажми «✅ Я проснулся», чтобы сохранить короткий check-in.",
       reply_markup=menu_keyboard(),
     )
 
@@ -416,7 +458,7 @@ async def run_aiogram_bot() -> None:
   async def alarm_start(message: Message, state: FSMContext) -> None:
     await state.clear()
     await state.set_state(AlarmFlow.minutes)
-    await message.answer("Через сколько минут разбудить? Например: 10, 15 или 20", reply_markup=power_nap_keyboard())
+    await message.answer("Через сколько минут разбудить? Например: 10, 15 или 20.", reply_markup=power_nap_keyboard())
 
   @router.message(AlarmFlow.minutes)
   async def alarm_minutes(message: Message, state: FSMContext) -> None:
@@ -432,15 +474,30 @@ async def run_aiogram_bot() -> None:
     await state.clear()
     await message.answer(
       f"⏰ Будильник поставлен на {value} мин.\n"
-      f"Код отключения: {alarm.dismiss_code}",
+      f"Код отключения: {alarm.dismiss_code}\n\n"
+      "Когда он сработает, отправь этот код одним сообщением или нажми «✅ Я проснулся».",
       reply_markup=menu_keyboard(),
     )
 
   @router.message(F.text == "✅ Я проснулся")
   async def wake_start(message: Message, state: FSMContext) -> None:
     await state.clear()
+
+    user = services.store.upsert_user(
+      message.from_user.id,
+      message.from_user.username if message.from_user else None,
+    )
+
+    alarm = dismiss_latest_alarm_for_user(user.id)
+    if alarm is not None:
+      services.analytics.track(
+        AnalyticsEventName.ALARM_DISMISSED,
+        user.id,
+        {"alarm_id": str(alarm.id), "source": "wake_button"},
+      )
+
     await state.set_state(WakeFlow.slept)
-    await message.answer("Сколько минут примерно спал? Например: 420", reply_markup=cancel_keyboard())
+    await message.answer("Сколько минут примерно спал? Например: 420.", reply_markup=cancel_keyboard())
 
   @router.message(WakeFlow.slept)
   async def wake_slept(message: Message, state: FSMContext) -> None:
@@ -570,18 +627,10 @@ async def run_aiogram_bot() -> None:
       await message.answer("Введи число минут.", reply_markup=cancel_keyboard())
       return
 
-    if choice == "power_nap" and value < 10:
+    if choice == "power_nap" and value not in {10, 15, 20}:
       await message.answer(
-        "Для power nap нужно хотя бы 10 минут.\n\n"
-        "Выбери 10, 15 или 20. Если времени меньше, лучше нажми «🧘 Медитация» и сделай короткий recovery break.",
-        reply_markup=power_nap_keyboard(),
-      )
-      return
-
-    if choice == "power_nap" and value > 20:
-      await message.answer(
-        "Power nap лучше держать в диапазоне 10-20 минут.\n\n"
-        "Выбери 10, 15 или 20. Если есть больше времени, лучше используй «🧘 Медитация» или дневной перерыв.",
+        "Power nap лучше выбрать строго на 10, 15 или 20 минут.\n\n"
+        "Если времени меньше 10 минут, лучше используй «🧘 Медитация» как короткий recovery break.",
         reply_markup=power_nap_keyboard(),
       )
       return
@@ -679,7 +728,7 @@ async def run_aiogram_bot() -> None:
   async def night_start(message: Message, state: FSMContext) -> None:
     await state.clear()
     await state.set_state(NightFlow.slept)
-    await message.answer("Сколько минут примерно спал прошлой ночью? Например: 420", reply_markup=cancel_keyboard())
+    await message.answer("Сколько минут примерно спал прошлой ночью? Например: 420.", reply_markup=cancel_keyboard())
 
   @router.message(NightFlow.slept)
   async def night_slept(message: Message, state: FSMContext) -> None:
