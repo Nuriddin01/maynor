@@ -489,13 +489,13 @@ async def run_aiogram_bot() -> None:
     if alarm is not None:
       services.analytics.track(AnalyticsEventName.ALARM_DISMISSED, user.id, {"alarm_id": str(alarm.id), "source": "wake_button"})
     await state.set_state(WakeFlow.slept)
-    await message.answer("Сколько минут примерно спал? Например: 420.", reply_markup=cancel_keyboard())
+    await message.answer("Сколько часов примерно спал? Например: 5, 5.5 или 6.", reply_markup=cancel_keyboard())
 
   @router.message(WakeFlow.slept)
   async def wake_slept(message: Message, state: FSMContext) -> None:
-    value = _parse_int(message.text, 0, 1440)
+    value = _parse_sleep_hours(message.text, 0, 24)
     if value is None:
-      await message.answer("Введи число минут от 0 до 1440.", reply_markup=cancel_keyboard())
+      await message.answer("Введи число часов: 5, 5.5 или 6. Можно использовать только шаг 0.5 часа.", reply_markup=cancel_keyboard())
       return
     await state.update_data(slept=value)
     await state.set_state(WakeFlow.quality)
@@ -517,9 +517,26 @@ async def run_aiogram_bot() -> None:
     if value is None:
       await message.answer("Выбери число от 1 до 5.", reply_markup=scale_keyboard())
       return
-    await state.update_data(feeling=value)
+
+    user = user_from_message(message)
+    has_recommendation = _has_previous_recommendation(user.id)
+    await state.update_data(feeling=value, has_recommendation=has_recommendation)
+
+    if not has_recommendation:
+      await state.update_data(helpfulness=3)
+      await state.set_state(WakeFlow.note)
+      await message.answer(
+        "Пока нет прошлой рекомендации, поэтому вопрос о её пользе пропускаю.\n\n"
+        "Можно добавить короткую заметку. Если не хочешь - напиши «пропустить».",
+        reply_markup=cancel_keyboard(),
+      )
+      return
+
     await state.set_state(WakeFlow.helpfulness)
-    await message.answer("Насколько рекомендация помогла 1-5?", reply_markup=scale_keyboard())
+    await message.answer(
+      "Насколько вчерашняя рекомендация помогла уснуть 1-5?",
+      reply_markup=scale_keyboard(),
+    )
 
   @router.message(WakeFlow.helpfulness)
   async def wake_helpfulness(message: Message, state: FSMContext) -> None:
@@ -656,13 +673,13 @@ async def run_aiogram_bot() -> None:
   async def night_start(message: Message, state: FSMContext) -> None:
     await state.clear()
     await state.set_state(NightFlow.slept)
-    await message.answer("Сколько минут примерно спал прошлой ночью? Например: 420.", reply_markup=cancel_keyboard())
+    await message.answer("Сколько часов примерно спал прошлой ночью? Например: 5, 5.5 или 6.", reply_markup=cancel_keyboard())
 
   @router.message(NightFlow.slept)
   async def night_slept(message: Message, state: FSMContext) -> None:
-    value = _parse_int(message.text, 0, 1440)
+    value = _parse_sleep_hours(message.text, 0, 24)
     if value is None:
-      await message.answer("Введи число минут от 0 до 1440.", reply_markup=cancel_keyboard())
+      await message.answer("Введи число часов: 5, 5.5 или 6. Можно использовать только шаг 0.5 часа.", reply_markup=cancel_keyboard())
       return
     await state.update_data(slept=value)
     await state.set_state(NightFlow.quality)
@@ -772,7 +789,7 @@ def _summary_text(summary: object) -> str:
     return "📊 Пока мало данных. После check-in здесь появится статистика за 7 дней."
 
   avg_duration = getattr(summary, "average_duration", None)
-  duration_text = "нет данных" if avg_duration is None else f"{avg_duration / 60:.1f} ч"
+  duration_text = "нет данных" if avg_duration is None else _format_hours(int(avg_duration), round_to_half=True)
   quality = getattr(summary, "average_quality", None)
   feeling = getattr(summary, "average_post_wake_feeling", None)
   debt = getattr(summary, "possible_sleep_debt_minutes", 0)
@@ -798,13 +815,30 @@ def _history_text(history: dict[str, object]) -> str:
   if entries:
     lines.append("Check-ins:")
     for entry in entries[-3:]:
-      lines.append(f"- сон {entry.duration_minutes} мин, качество {entry.quality}/5, польза {entry.helpfulness}/5")
+      lines.append(f"- сон {_format_hours(entry.duration_minutes)}, качество {entry.quality}/5, польза {entry.helpfulness}/5")
   if recommendations:
     lines.append("")
     lines.append("Рекомендации:")
     for rec in recommendations[-3:]:
       lines.append(f"- {rec.recommended_mode.value}, {rec.duration_minutes} мин")
   return "\n".join(lines)
+
+
+def _has_previous_recommendation(user_id: object) -> bool:
+  try:
+    history = services.history(user_id, 1)
+  except Exception:
+    return False
+  return bool(history.get("recommendations"))
+
+
+def _format_hours(minutes: int, round_to_half: bool = False) -> str:
+  value = minutes / 60
+  if round_to_half:
+    value = round(value * 2) / 2
+  if float(value).is_integer():
+    return f"{int(value)} ч"
+  return f"{value:.1f} ч"
 
 
 def _parse_int(text: str | None, min_value: int, max_value: int) -> int | None:
@@ -815,6 +849,24 @@ def _parse_int(text: str | None, min_value: int, max_value: int) -> int | None:
   if min_value <= value <= max_value:
     return value
   return None
+
+
+def _parse_sleep_hours(text: str | None, min_hours: int, max_hours: int) -> int | None:
+  raw = (text or "").strip().lower().replace(",", ".")
+  raw = raw.replace("часов", "").replace("часа", "").replace("час", "").replace("ч", "").strip()
+  try:
+    value = float(raw)
+  except ValueError:
+    return None
+
+  if not min_hours <= value <= max_hours:
+    return None
+
+  doubled = value * 2
+  if abs(doubled - round(doubled)) > 1e-9:
+    return None
+
+  return int(round(value * 60))
 
 
 def _parse_audio(text: str | None) -> AudioType | None:
