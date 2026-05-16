@@ -27,12 +27,12 @@ logger = logging.getLogger(__name__)
 STAR_PLANS = {
   "premium_monthly": {
     "title": "Sleep Support Premium 30 дней",
-    "amount": 299,
+    "amount": 99,
     "period_days": 30,
   },
   "premium_yearly": {
     "title": "Sleep Support Premium 365 дней",
-    "amount": 2490,
+    "amount": 999,
     "period_days": 365,
   },
 }
