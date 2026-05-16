@@ -26,7 +26,7 @@ PLANS = {
     "premium_monthly": SubscriptionPlan(
         code="premium_monthly",
         title="Sleep Support Premium 30 дней",
-        price_minor=99,
+        price_minor=299,
         currency="XTR",
         period_days=30,
         trial_days=0,
@@ -35,7 +35,7 @@ PLANS = {
     "premium_yearly": SubscriptionPlan(
         code="premium_yearly",
         title="Sleep Support Premium 365 дней",
-        price_minor=1000,
+        price_minor=2490,
         currency="XTR",
         period_days=365,
         trial_days=0,
