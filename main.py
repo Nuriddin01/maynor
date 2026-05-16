@@ -92,7 +92,9 @@ def start_telegram_thread() -> threading.Thread:
     return thread
 
 
-def print_startup(host: str, port: int, db_path: str, telegram_enabled: bool, worker_enabled: bool) -> None:
+def print_startup(host: str, port: int, db_path: str, telegram_enabled: bool, worker_enabled: bool,
+    admin_token_is_default: bool,
+) -> None:
     print("\nSleep Support Bot запущен локально")
     print(f"API:       http://{host}:{port}")
     print(f"Docs:      http://{host}:{port}/docs")
@@ -100,9 +102,11 @@ def print_startup(host: str, port: int, db_path: str, telegram_enabled: bool, wo
     print(f"SQLite DB: {Path(db_path).resolve()}")
     print(f"Telegram:  {'polling запущен' if telegram_enabled else 'не запущен - TELEGRAM_BOT_TOKEN не задан'}")
     print(f"Worker:    {'alarm worker запущен' if worker_enabled else 'alarm worker выключен'}")
-    print("Admin token по умолчанию: change-me-local-admin-token")
+    if admin_token_is_default:
+        print("Admin token: используется значение по умолчанию - замени ADMIN_TOKEN в Railway Variables")
+    else:
+        print("Admin token: задан через переменные окружения")
     print("Остановить: Ctrl+C\n")
-
 
 def main() -> None:
     args = parse_args()
@@ -132,7 +136,14 @@ def main() -> None:
     if telegram_enabled:
         start_telegram_thread()
 
-    print_startup(args.host, args.port, args.db, telegram_enabled=telegram_enabled, worker_enabled=not args.no_worker)
+    print_startup(
+    args.host,
+    args.port,
+    args.db,
+    telegram_enabled=telegram_enabled,
+    worker_enabled=not args.no_worker,
+    admin_token_is_default=settings.admin_token == "change-me-local-admin-token",
+    )
     uvicorn.run("apps.api.app.main:app", host=args.host, port=args.port, reload=False, log_level="info")
 
 

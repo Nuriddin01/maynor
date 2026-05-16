@@ -25,20 +25,20 @@ PREMIUM_FEATURES = frozenset({
 PLANS = {
     "premium_monthly": SubscriptionPlan(
         code="premium_monthly",
-        title="Sleep Support Premium",
-        price_minor=29900,
-        currency="RUB",
+        title="Sleep Support Premium 30 дней",
+        price_minor=99,
+        currency="XTR",
         period_days=30,
-        trial_days=7,
+        trial_days=0,
         features=PREMIUM_FEATURES,
     ),
     "premium_yearly": SubscriptionPlan(
         code="premium_yearly",
-        title="Sleep Support Premium Yearly",
-        price_minor=249000,
-        currency="RUB",
+        title="Sleep Support Premium 365 дней",
+        price_minor=1000,
+        currency="XTR",
         period_days=365,
-        trial_days=14,
+        trial_days=0,
         features=PREMIUM_FEATURES,
     ),
 }

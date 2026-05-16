@@ -8,7 +8,7 @@ from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from packages.analytics.events import AnalyticsService
-from packages.billing.providers import MockBillingProvider
+from packages.billing.providers import MockBillingProvider, TelegramStarsBillingProvider
 from packages.billing.service import BillingService
 from packages.content.registry import ContentRegistry, default_registry
 from packages.core.config import get_settings
@@ -75,12 +75,13 @@ class AppServices:
     def local(cls, db_path: str | None = None) -> AppServices:
         settings = get_settings()
         path = db_path or settings.local_db_path
+        billing_provider = TelegramStarsBillingProvider() if settings.billing_provider == "telegram_stars" else MockBillingProvider()
         return cls(
             store=SQLiteAppStore(path),
             recommendation_engine=RecommendationEngine(),
             stats_service=StatsService(),
             analytics=AnalyticsService(SQLiteAnalyticsStore(path)),
-            billing=BillingService(MockBillingProvider(), SQLiteBillingStore(path)),
+            billing=BillingService(billing_provider, SQLiteBillingStore(path)),
             alarms=AlarmService(SQLiteAlarmStore(path)),
             consent=ConsentService(default_consent_versions()),
             content=default_registry(),

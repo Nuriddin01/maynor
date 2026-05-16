@@ -2,17 +2,39 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from uuid import uuid4
 
 from apps.bot.app.local_bot import LocalBotSession
 from apps.bot.app.texts import CONSENT_TEXT, MAIN_MENU, recommendation_text
+from packages.analytics.events import AnalyticsEventName
+from packages.billing.plans import PLANS
 from packages.core.config import get_settings
 from packages.core.logging import configure_logging
-from packages.billing.plans import PLANS
-from packages.domain.models import AnalyticsEventName, AudioType
+from packages.domain.models import (
+    AudioType,
+    BillingProviderName,
+    PaymentIntent,
+    Subscription,
+    SubscriptionStatus,
+    new_uuid,
+)
 from packages.services.facade import services
 
 logger = logging.getLogger(__name__)
+
+STAR_PLANS = {
+    "premium_monthly": {
+        "title": "Sleep Support Premium 30 дней",
+        "amount": 299,
+        "period_days": 30,
+    },
+    "premium_yearly": {
+        "title": "Sleep Support Premium 365 дней",
+        "amount": 2490,
+        "period_days": 365,
+    },
+}
 
 
 async def run_local_bot() -> None:
@@ -30,7 +52,7 @@ async def run_aiogram_bot() -> None:
         from aiogram.filters import CommandStart
         from aiogram.fsm.context import FSMContext
         from aiogram.fsm.state import State, StatesGroup
-        from aiogram.types import KeyboardButton, Message, ReplyKeyboardMarkup
+        from aiogram.types import KeyboardButton, LabeledPrice, Message, PreCheckoutQuery, ReplyKeyboardMarkup
     except ImportError as exc:
         raise RuntimeError("aiogram is not installed. Install project dependencies or use BOT_MODE=local") from exc
 
@@ -79,7 +101,97 @@ async def run_aiogram_bot() -> None:
         )
 
     def scale_keyboard() -> ReplyKeyboardMarkup:
-        return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text=str(value)) for value in range(1, 6)]], resize_keyboard=True)
+        return ReplyKeyboardMarkup(
+            keyboard=[[KeyboardButton(text=str(value)) for value in range(1, 6)]],
+            resize_keyboard=True,
+        )
+
+    def premium_keyboard() -> ReplyKeyboardMarkup:
+        return ReplyKeyboardMarkup(
+            keyboard=[
+                [KeyboardButton(text="Купить Premium 30 дней ⭐")],
+                [KeyboardButton(text="Купить Premium 365 дней ⭐")],
+                [KeyboardButton(text="В меню")],
+            ],
+            resize_keyboard=True,
+        )
+
+    async def send_premium_invoice(message: Message, plan_code: str) -> None:
+        if plan_code not in STAR_PLANS:
+            await message.answer("Тариф не найден. Вернись в меню и попробуй снова.", reply_markup=menu_keyboard())
+            return
+
+        user = services.store.upsert_user(message.from_user.id, message.from_user.username if message.from_user else None)
+        plan = STAR_PLANS[plan_code]
+        idempotency_key = f"tg-stars-{user.telegram_id}-{plan_code}-{uuid4().hex}"
+
+        try:
+            services.billing.create_checkout(user.id, plan_code, idempotency_key)
+        except Exception:
+            logger.exception("Failed to create checkout intent")
+
+        await message.answer_invoice(
+            title=str(plan["title"]),
+            description=(
+                "Доступ к Premium-функциям Sleep Support Bot. "
+                "Бот не заменяет врача и не ставит диагнозы."
+            ),
+            payload=f"premium:{plan_code}:{idempotency_key}",
+            provider_token="",
+            currency="XTR",
+            prices=[LabeledPrice(label=str(plan["title"]), amount=int(plan["amount"]))],
+        )
+
+    def activate_telegram_stars_subscription(
+        user_id,
+        plan_code: str,
+        idempotency_key: str,
+        amount_minor: int,
+        currency: str,
+        telegram_payment_charge_id: str,
+    ) -> Subscription:
+        now = datetime.now(timezone.utc)
+        plan = STAR_PLANS[plan_code]
+
+        confirm_method = getattr(services.billing, "confirm_telegram_stars_payment", None)
+        if callable(confirm_method):
+            return confirm_method(
+                user_id=user_id,
+                plan_code=plan_code,
+                idempotency_key=idempotency_key,
+                amount_minor=amount_minor,
+                currency=currency,
+                telegram_payment_charge_id=telegram_payment_charge_id,
+                now=now,
+            )
+
+        store = services.billing._store
+
+        existing = store.get_payment(idempotency_key)
+        payment = PaymentIntent(
+            id=existing.id if existing else new_uuid(),
+            user_id=user_id,
+            plan_code=plan_code,
+            provider=BillingProviderName.TELEGRAM_STARS,
+            amount_minor=amount_minor,
+            currency=currency,
+            status="paid",
+            payment_url=f"telegram-stars://{telegram_payment_charge_id}",
+            idempotency_key=idempotency_key,
+            created_at=existing.created_at if existing else now,
+        )
+        store.save_payment(payment)
+
+        subscription = Subscription(
+            id=new_uuid(),
+            user_id=user_id,
+            plan_code=plan_code,
+            status=SubscriptionStatus.ACTIVE,
+            provider=BillingProviderName.TELEGRAM_STARS,
+            current_period_end=now + timedelta(days=int(plan["period_days"])),
+            created_at=now,
+        )
+        return store.save_subscription(subscription)
 
     @router.message(CommandStart())
     async def start(message: Message) -> None:
@@ -113,12 +225,101 @@ async def run_aiogram_bot() -> None:
     async def premium(message: Message) -> None:
         user = services.store.upsert_user(message.from_user.id, message.from_user.username if message.from_user else None)
         services.analytics.track(AnalyticsEventName.PREMIUM_SCREEN_VIEWED, user.id, {"source": "telegram"})
-        lines = ["⭐ Premium", "", "Расширенные сценарии, глубокая история, weekly insights и больше контента.", "", "Тарифы:"]
-        for plan in PLANS.values():
-            lines.append(f"- {plan.title}: {plan.price_minor / 100:.0f} {plan.currency} / {plan.period_days} дней")
-        lines.append("")
-        lines.append("В локальном режиме платежи работают через mock provider в Swagger: /billing/checkout")
-        await message.answer("\n".join(lines), reply_markup=menu_keyboard())
+
+        lines = [
+            "⭐ Premium",
+            "",
+            "Что входит:",
+            "- расширенные сценарии сна и восстановления",
+            "- глубокая история",
+            "- advanced analytics",
+            "- weekly insights",
+            "- больше контента",
+            "",
+            "Оплата проходит через Telegram Stars.",
+            "Карту в боте вводить не нужно.",
+            "",
+            "Тарифы:",
+        ]
+
+        for plan_code, plan in STAR_PLANS.items():
+            base_plan = PLANS.get(plan_code)
+            title = base_plan.title if base_plan else str(plan["title"])
+            lines.append(f"- {title}: {plan['amount']} ⭐ / {plan['period_days']} дней")
+
+        await message.answer("\n".join(lines), reply_markup=premium_keyboard())
+
+    @router.message(F.text == "Купить Premium 30 дней ⭐")
+    async def buy_monthly(message: Message) -> None:
+        await send_premium_invoice(message, "premium_monthly")
+
+    @router.message(F.text == "Купить Premium 365 дней ⭐")
+    async def buy_yearly(message: Message) -> None:
+        await send_premium_invoice(message, "premium_yearly")
+
+    @router.pre_checkout_query()
+    async def pre_checkout(query: PreCheckoutQuery) -> None:
+        payload = query.invoice_payload or ""
+        parts = payload.split(":")
+
+        if len(parts) != 3 or parts[0] != "premium" or parts[1] not in STAR_PLANS:
+            await query.answer(ok=False, error_message="Не удалось проверить платеж. Открой Premium заново.")
+            return
+
+        plan = STAR_PLANS[parts[1]]
+        if query.currency != "XTR" or query.total_amount != int(plan["amount"]):
+            await query.answer(ok=False, error_message="Сумма платежа не совпадает с выбранным тарифом.")
+            return
+
+        await query.answer(ok=True)
+
+    @router.message(F.successful_payment)
+    async def successful_payment(message: Message) -> None:
+        payment = message.successful_payment
+        if payment is None:
+            return
+
+        payload = payment.invoice_payload or ""
+        parts = payload.split(":")
+
+        if len(parts) != 3 or parts[0] != "premium" or parts[1] not in STAR_PLANS:
+            await message.answer(
+                "Платеж получен, но тариф не распознан. Напиши администратору.",
+                reply_markup=menu_keyboard(),
+            )
+            return
+
+        plan_code = parts[1]
+        idempotency_key = parts[2]
+        user = services.store.upsert_user(message.from_user.id, message.from_user.username if message.from_user else None)
+
+        subscription = activate_telegram_stars_subscription(
+            user_id=user.id,
+            plan_code=plan_code,
+            idempotency_key=idempotency_key,
+            amount_minor=payment.total_amount,
+            currency=payment.currency,
+            telegram_payment_charge_id=payment.telegram_payment_charge_id,
+        )
+
+        services.analytics.track(
+            AnalyticsEventName.SUBSCRIPTION_STARTED,
+            user.id,
+            {
+                "plan": plan_code,
+                "provider": "telegram_stars",
+                "amount": payment.total_amount,
+                "currency": payment.currency,
+            },
+        )
+
+        await message.answer(
+            "Готово, Premium активирован ✅\n\n"
+            f"Тариф: {STAR_PLANS[plan_code]['title']}\n"
+            f"Доступ до: {subscription.current_period_end.strftime('%d.%m.%Y')}\n\n"
+            "Спасибо за поддержку проекта.",
+            reply_markup=menu_keyboard(),
+        )
 
     @router.message(F.text == "⚙️ Настройки")
     async def settings_view(message: Message) -> None:
@@ -130,7 +331,7 @@ async def run_aiogram_bot() -> None:
             f"Язык: {prefs.language}\n"
             f"Цель сна: {prefs.target_sleep_minutes // 60} ч {prefs.target_sleep_minutes % 60:02d} мин\n"
             f"Power nap по умолчанию: {prefs.default_nap_duration} мин\n"
-            "\nВ этой локальной версии настройки можно менять через Swagger: PUT /users/{telegram_id}/profile",
+            "\nНастройки можно менять через Swagger: PUT /users/{telegram_id}/profile",
             reply_markup=menu_keyboard(),
         )
 
@@ -145,9 +346,11 @@ async def run_aiogram_bot() -> None:
         if value is None:
             await message.answer("Введи число минут от 1 до 720")
             return
+
         user = services.store.upsert_user(message.from_user.id, message.from_user.username if message.from_user else None)
         key = f"tg-{user.telegram_id}-{int(datetime.now(timezone.utc).timestamp())}"
         alarm = services.create_power_nap_alarm(user, value, key)
+
         await state.clear()
         await message.answer(
             f"⏰ Будильник поставлен на {value} мин.\n"
@@ -166,6 +369,7 @@ async def run_aiogram_bot() -> None:
         if value is None:
             await message.answer("Введи число минут от 0 до 1440")
             return
+
         await state.update_data(slept=value)
         await state.set_state(WakeFlow.quality)
         await message.answer("Качество сна 1-5?", reply_markup=scale_keyboard())
@@ -176,6 +380,7 @@ async def run_aiogram_bot() -> None:
         if value is None:
             await message.answer("Выбери число от 1 до 5")
             return
+
         await state.update_data(quality=value)
         await state.set_state(WakeFlow.feeling)
         await message.answer("Самочувствие после пробуждения 1-5?", reply_markup=scale_keyboard())
@@ -186,6 +391,7 @@ async def run_aiogram_bot() -> None:
         if value is None:
             await message.answer("Выбери число от 1 до 5")
             return
+
         await state.update_data(feeling=value)
         await state.set_state(WakeFlow.helpfulness)
         await message.answer("Насколько рекомендация помогла 1-5?", reply_markup=scale_keyboard())
@@ -196,6 +402,7 @@ async def run_aiogram_bot() -> None:
         if value is None:
             await message.answer("Выбери число от 1 до 5")
             return
+
         await state.update_data(helpfulness=value)
         await state.set_state(WakeFlow.note)
         await message.answer("Можно добавить короткую заметку. Если не хочешь - напиши пропустить")
@@ -205,6 +412,7 @@ async def run_aiogram_bot() -> None:
         data = await state.get_data()
         note = None if (message.text or "").strip().lower() in {"пропустить", "skip", "-"} else message.text
         user = services.store.upsert_user(message.from_user.id, message.from_user.username if message.from_user else None)
+
         services.add_wake_checkin(
             user,
             slept_minutes=data["slept"],
@@ -214,6 +422,7 @@ async def run_aiogram_bot() -> None:
             audio=AudioType.SILENCE,
             note=note,
         )
+
         await state.clear()
         await message.answer("Записал. Это поможет точнее подбирать следующие рекомендации.", reply_markup=menu_keyboard())
 
@@ -227,10 +436,12 @@ async def run_aiogram_bot() -> None:
     async def power_nap_start(message: Message, state: FSMContext) -> None:
         user = services.store.upsert_user(message.from_user.id, message.from_user.username if message.from_user else None)
         has_data = user.preferences.wake_time is not None and bool(services.store.entries.get(user.id, []))
+
         if has_data:
             recommendation = services.generate_day_recovery(user, choice="power_nap", free_minutes=None, reminder_enabled=True)
             await message.answer(recommendation_text(recommendation), reply_markup=menu_keyboard())
             return
+
         await state.set_state(DayRecoveryFlow.free_minutes)
         await state.update_data(choice="power_nap")
         await message.answer("Сколько минут реально есть на короткий сон? Например: 10, 15 или 20")
@@ -239,10 +450,12 @@ async def run_aiogram_bot() -> None:
     async def meditation_start(message: Message, state: FSMContext) -> None:
         user = services.store.upsert_user(message.from_user.id, message.from_user.username if message.from_user else None)
         has_data = user.preferences.wake_time is not None and bool(services.store.entries.get(user.id, []))
+
         if has_data:
             recommendation = services.generate_day_recovery(user, choice="meditation", free_minutes=None, reminder_enabled=True)
             await message.answer(recommendation_text(recommendation), reply_markup=menu_keyboard())
             return
+
         await state.set_state(DayRecoveryFlow.free_minutes)
         await state.update_data(choice="meditation")
         await message.answer("Сколько минут можешь выделить на медитацию или восстановительный перерыв?")
@@ -253,9 +466,11 @@ async def run_aiogram_bot() -> None:
         if value is None:
             await message.answer("Введи число минут от 5 до 60")
             return
+
         data = await state.get_data()
         user = services.store.upsert_user(message.from_user.id, message.from_user.username if message.from_user else None)
         recommendation = services.generate_day_recovery(user, choice=data["choice"], free_minutes=value, reminder_enabled=True)
+
         await state.clear()
         await message.answer(recommendation_text(recommendation), reply_markup=menu_keyboard())
 
@@ -263,10 +478,12 @@ async def run_aiogram_bot() -> None:
     async def quick_sleep_start(message: Message, state: FSMContext) -> None:
         user = services.store.upsert_user(message.from_user.id, message.from_user.username if message.from_user else None)
         has_data = user.preferences.wake_time is not None and bool(services.store.entries.get(user.id, []))
+
         if has_data:
             recommendation = services.generate_sleep_or_wake_technique(user, kind="quick_sleep", quality=None, wake_feeling=None)
             await message.answer(recommendation_text(recommendation), reply_markup=menu_keyboard())
             return
+
         await state.set_state(TechniqueFlow.quality)
         await state.update_data(kind="quick_sleep")
         await message.answer("Как оцениваешь последнее качество сна 1-5?", reply_markup=scale_keyboard())
@@ -275,10 +492,12 @@ async def run_aiogram_bot() -> None:
     async def good_wake_start(message: Message, state: FSMContext) -> None:
         user = services.store.upsert_user(message.from_user.id, message.from_user.username if message.from_user else None)
         has_data = user.preferences.wake_time is not None and bool(services.store.entries.get(user.id, []))
+
         if has_data:
             recommendation = services.generate_sleep_or_wake_technique(user, kind="good_wake", quality=None, wake_feeling=None)
             await message.answer(recommendation_text(recommendation), reply_markup=menu_keyboard())
             return
+
         await state.set_state(TechniqueFlow.wake_feeling)
         await state.update_data(kind="good_wake")
         await message.answer("Как оцениваешь самочувствие после пробуждения 1-5?", reply_markup=scale_keyboard())
@@ -289,8 +508,10 @@ async def run_aiogram_bot() -> None:
         if value is None:
             await message.answer("Выбери число от 1 до 5")
             return
+
         user = services.store.upsert_user(message.from_user.id, message.from_user.username if message.from_user else None)
         recommendation = services.generate_sleep_or_wake_technique(user, kind="quick_sleep", quality=value, wake_feeling=None)
+
         await state.clear()
         await message.answer(recommendation_text(recommendation), reply_markup=menu_keyboard())
 
@@ -300,8 +521,10 @@ async def run_aiogram_bot() -> None:
         if value is None:
             await message.answer("Выбери число от 1 до 5")
             return
+
         user = services.store.upsert_user(message.from_user.id, message.from_user.username if message.from_user else None)
         recommendation = services.generate_sleep_or_wake_technique(user, kind="good_wake", quality=None, wake_feeling=value)
+
         await state.clear()
         await message.answer(recommendation_text(recommendation), reply_markup=menu_keyboard())
 
@@ -316,6 +539,7 @@ async def run_aiogram_bot() -> None:
         if value is None:
             await message.answer("Введи число минут от 0 до 1440")
             return
+
         await state.update_data(slept=value)
         await state.set_state(NightFlow.quality)
         await message.answer("Качество сна 1-5?", reply_markup=scale_keyboard())
@@ -326,6 +550,7 @@ async def run_aiogram_bot() -> None:
         if value is None:
             await message.answer("Выбери число от 1 до 5")
             return
+
         await state.update_data(quality=value)
         await state.set_state(NightFlow.sleepiness)
         await message.answer("Сонливость сейчас 1-5?", reply_markup=scale_keyboard())
@@ -336,6 +561,7 @@ async def run_aiogram_bot() -> None:
         if value is None:
             await message.answer("Выбери число от 1 до 5")
             return
+
         await state.update_data(sleepiness=value)
         await state.set_state(NightFlow.stress)
         await message.answer("Стресс или тревожность 1-5?", reply_markup=scale_keyboard())
@@ -346,6 +572,7 @@ async def run_aiogram_bot() -> None:
         if value is None:
             await message.answer("Выбери число от 1 до 5")
             return
+
         await state.update_data(stress=value)
         await state.set_state(NightFlow.free_minutes)
         await message.answer("Сколько минут есть на подготовку ко сну?")
@@ -356,6 +583,7 @@ async def run_aiogram_bot() -> None:
         if value is None:
             await message.answer("Введи число минут от 1 до 240")
             return
+
         await state.update_data(free_minutes=value)
         await state.set_state(NightFlow.alarm)
         await message.answer("Нужен будильник? Напиши да или нет")
@@ -366,6 +594,7 @@ async def run_aiogram_bot() -> None:
         if text not in {"да", "нет", "yes", "no"}:
             await message.answer("Ответь да или нет")
             return
+
         await state.update_data(needs_alarm=text in {"да", "yes"})
         await state.set_state(NightFlow.audio)
         await message.answer("Формат: silence / rain / forest / pink_noise / guided_text / breathing_only")
@@ -376,8 +605,10 @@ async def run_aiogram_bot() -> None:
         if audio is None:
             await message.answer("Выбери один формат из списка")
             return
+
         data = await state.get_data()
         user = services.store.upsert_user(message.from_user.id, message.from_user.username if message.from_user else None)
+
         recommendation = services.generate_night_recommendation(
             user=user,
             slept_minutes=data["slept"],
@@ -388,6 +619,7 @@ async def run_aiogram_bot() -> None:
             needs_alarm=data["needs_alarm"],
             preferred_audio=audio,
         )
+
         await state.clear()
         await message.answer(recommendation_text(recommendation), reply_markup=menu_keyboard())
 
@@ -400,11 +632,13 @@ async def run_aiogram_bot() -> None:
 def _summary_text(summary: object) -> str:
     if getattr(summary, "entries_count", 0) == 0:
         return "📊 Пока мало данных. После check-in здесь появится статистика за 7 дней."
+
     avg_duration = getattr(summary, "average_duration", None)
     duration_text = "нет данных" if avg_duration is None else f"{avg_duration / 60:.1f} ч"
     quality = getattr(summary, "average_quality", None)
     feeling = getattr(summary, "average_post_wake_feeling", None)
     debt = getattr(summary, "possible_sleep_debt_minutes", 0)
+
     return (
         "📊 Статистика за 7 дней\n\n"
         f"Записей: {summary.entries_count}\n"
@@ -418,18 +652,23 @@ def _summary_text(summary: object) -> str:
 def _history_text(history: dict[str, object]) -> str:
     entries = list(history.get("sleep_entries", []))
     recommendations = list(history.get("recommendations", []))
+
     if not entries and not recommendations:
         return "📜 История пока пустая. Используй любой сценарий или check-in - запись появится здесь."
+
     lines = ["📜 Последняя история", ""]
+
     if entries:
         lines.append("Check-ins:")
         for entry in entries[-3:]:
             lines.append(f"- сон {entry.duration_minutes} мин, качество {entry.quality}/5, польза {entry.helpfulness}/5")
+
     if recommendations:
         lines.append("")
         lines.append("Рекомендации:")
         for rec in recommendations[-3:]:
             lines.append(f"- {rec.recommended_mode.value}, {rec.duration_minutes} мин")
+
     return "\n".join(lines)
 
 
@@ -438,8 +677,10 @@ def _parse_int(text: str | None, min_value: int, max_value: int) -> int | None:
         value = int(text or "")
     except ValueError:
         return None
+
     if min_value <= value <= max_value:
         return value
+
     return None
 
 
@@ -453,9 +694,11 @@ def _parse_audio(text: str | None) -> AudioType | None:
 async def main() -> None:
     settings = get_settings()
     configure_logging(settings.log_level)
+
     if settings.bot_mode == "local":
         await run_local_bot()
         return
+
     await run_aiogram_bot()
 
 
