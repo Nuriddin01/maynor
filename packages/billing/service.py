@@ -82,23 +82,27 @@ class BillingService:
             created_at=now,
         )
         return self._store.save_subscription(subscription)
-    
-    def confirm_telegram_stars_payment(self, user_id: UUID, plan_code: str, 
-                                       idempotency_key: str,
-                                       amount_minor: int,
-                                       currency: str,
-                                       telegram_payment_charge_id: str,
-                                       now: datetime | None = None,
-                                       ) -> Subscription:
+
+    def confirm_telegram_stars_payment(
+        self,
+        user_id: UUID,
+        plan_code: str,
+        idempotency_key: str,
+        amount_minor: int,
+        currency: str,
+        telegram_payment_charge_id: str,
+        now: datetime | None = None,
+    ) -> Subscription:
         now = now or datetime.now(timezone.utc)
         plan = get_plan(plan_code)
         if currency != "XTR":
             raise ValueError("Telegram Stars payment must use XTR currency")
         if amount_minor != plan.price_minor:
             raise ValueError("payment amount does not match selected plan")
+
         existing = self._store.get_payment(idempotency_key)
         if existing is None:
-            existing = PaymentIntent(
+            intent = PaymentIntent(
                 id=new_uuid(),
                 user_id=user_id,
                 plan_code=plan.code,
@@ -111,7 +115,7 @@ class BillingService:
                 created_at=now,
             )
         else:
-            existing = PaymentIntent(
+            intent = PaymentIntent(
                 id=existing.id,
                 user_id=existing.user_id,
                 plan_code=existing.plan_code,
@@ -123,7 +127,8 @@ class BillingService:
                 idempotency_key=existing.idempotency_key,
                 created_at=existing.created_at,
             )
-        self._store.save_payment(existing)
+        self._store.save_payment(intent)
+
         subscription = Subscription(
             id=new_uuid(),
             user_id=user_id,

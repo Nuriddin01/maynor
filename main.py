@@ -50,9 +50,9 @@ async def alarm_worker_loop(telegram_token: str | None = None) -> None:
             text = (
                 "⏰ Будильник\n\n"
                 "Пора мягко проснуться. Сядь, сделай пару спокойных вдохов и выпей воды.\n\n"
-                f"Код отключения: {alarm.dismiss_code}\n"
+                f"Код отключения: {alarm.dismiss_code}\n\n"
                 "Чтобы отключить будильник, отправь этот код одним сообщением.\n"
-                "После подъема можешь нажать <<✅ Я проснулся.>>, чтобы сохранить check-in."
+                "После подъема можешь нажать «✅ Я проснулся», чтобы сохранить check-in."
             )
             if telegram_token and user is not None:
                 try:
@@ -93,10 +93,15 @@ def start_telegram_thread() -> threading.Thread:
     return thread
 
 
-def print_startup(host: str, port: int, db_path: str, telegram_enabled: bool, worker_enabled: bool,
+def print_startup(
+    host: str,
+    port: int,
+    db_path: str,
+    telegram_enabled: bool,
+    worker_enabled: bool,
     admin_token_is_default: bool,
 ) -> None:
-    print("\nSleep Support Bot запущен локально")
+    print("\nSleep Support Bot запущен")
     print(f"API:       http://{host}:{port}")
     print(f"Docs:      http://{host}:{port}/docs")
     print(f"Health:    http://{host}:{port}/health")
@@ -109,6 +114,7 @@ def print_startup(host: str, port: int, db_path: str, telegram_enabled: bool, wo
         print("Admin token: задан через переменные окружения")
     print("Остановить: Ctrl+C\n")
 
+
 def main() -> None:
     args = parse_args()
     os.environ.setdefault("APP_ENV", "local")
@@ -120,7 +126,7 @@ def main() -> None:
         import uvicorn
         from packages.core.config import get_settings
     except ImportError:
-        print("Не найдены зависимости. Установи их командой: python -m pip install -r requirements-local.txt")
+        print("Не найдены зависимости. Установи их командой: python -m pip install -r requirements.txt")
         sys.exit(1)
 
     settings = get_settings()
@@ -138,12 +144,12 @@ def main() -> None:
         start_telegram_thread()
 
     print_startup(
-    args.host,
-    args.port,
-    args.db,
-    telegram_enabled=telegram_enabled,
-    worker_enabled=not args.no_worker,
-    admin_token_is_default=settings.admin_token == "change-me-local-admin-token",
+        args.host,
+        args.port,
+        args.db,
+        telegram_enabled=telegram_enabled,
+        worker_enabled=not args.no_worker,
+        admin_token_is_default=settings.admin_token == "change-me-local-admin-token",
     )
     uvicorn.run("apps.api.app.main:app", host=args.host, port=args.port, reload=False, log_level="info")
 
