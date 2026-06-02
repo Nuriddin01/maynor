@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from dataclasses import replace
+from datetime import datetime, time, timezone
+from pathlib import Path
 from uuid import uuid4
 
 from apps.bot.app.local_bot import LocalBotSession
@@ -12,6 +14,7 @@ from packages.core.config import get_settings
 from packages.core.logging import configure_logging
 from packages.domain.models import AlarmStatus, AnalyticsEventName, AudioType
 from packages.premium.service import PremiumExperienceService
+from packages.release2.service import Release2Service
 from packages.services.facade import services
 
 logger = logging.getLogger(__name__)
@@ -45,13 +48,14 @@ async def run_aiogram_bot() -> None:
     from aiogram.filters import CommandStart
     from aiogram.fsm.context import FSMContext
     from aiogram.fsm.state import State, StatesGroup
-    from aiogram.types import KeyboardButton, LabeledPrice, Message, PreCheckoutQuery, ReplyKeyboardMarkup
+    from aiogram.types import FSInputFile, KeyboardButton, LabeledPrice, Message, PreCheckoutQuery, ReplyKeyboardMarkup
   except ImportError as exc:
     raise RuntimeError("aiogram is not installed. Install dependencies or use BOT_MODE=local") from exc
 
   settings = get_settings()
   router = Router()
   premium_service = PremiumExperienceService(services.store, services.billing, settings.local_db_path)
+  release2_service = Release2Service(services.store, settings.local_db_path)
 
   class NightFlow(StatesGroup):
     slept = State()
@@ -83,15 +87,27 @@ async def run_aiogram_bot() -> None:
     kind = State()
     duration = State()
 
+  class ConcentrationFlow(StatesGroup):
+    minutes = State()
+
+  class SettingsFlow(StatesGroup):
+    timezone = State()
+    target_sleep = State()
+    nap_duration = State()
+    reminder_time = State()
+
   def menu_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
       keyboard=[
         [KeyboardButton(text="🛏 Рассчитать отбой"), KeyboardButton(text="🌙 Заснуть ночью")],
         [KeyboardButton(text="⚡ Power nap"), KeyboardButton(text="🧘 Медитация")],
+        [KeyboardButton(text="🔁 Повторить последнее"), KeyboardButton(text="🎯 Концентрация")],
         [KeyboardButton(text="💤 Быстро заснуть"), KeyboardButton(text="🌅 Хорошее пробуждение")],
         [KeyboardButton(text="✅ Я проснулся"), KeyboardButton(text="📊 Статистика")],
+        [KeyboardButton(text="📆 Статистика по периодам"), KeyboardButton(text="⚖️ Сравнить сценарии")],
         [KeyboardButton(text="📜 История"), KeyboardButton(text="⏰ Будильник")],
-        [KeyboardButton(text="⭐ Premium"), KeyboardButton(text="⚙️ Настройки")],
+        [KeyboardButton(text="🔔 Напоминания"), KeyboardButton(text="⚙️ Настройки")],
+        [KeyboardButton(text="⭐ Premium"), KeyboardButton(text="✅ Release 2")],
       ],
       resize_keyboard=True,
     )
@@ -186,6 +202,76 @@ async def run_aiogram_bot() -> None:
       resize_keyboard=True,
     )
 
+  def concentration_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+      keyboard=[
+        [KeyboardButton(text="5"), KeyboardButton(text="10"), KeyboardButton(text="15")],
+        [KeyboardButton(text="В меню"), KeyboardButton(text="Отменить сценарий")],
+      ],
+      resize_keyboard=True,
+    )
+
+  def period_stats_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+      keyboard=[
+        [KeyboardButton(text="7 дней"), KeyboardButton(text="30 дней")],
+        [KeyboardButton(text="⚖️ Сравнить сценарии")],
+        [KeyboardButton(text="В меню")],
+      ],
+      resize_keyboard=True,
+    )
+
+  def settings_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+      keyboard=[
+        [KeyboardButton(text="🌍 Часовой пояс"), KeyboardButton(text="🎯 Цель сна")],
+        [KeyboardButton(text="⚡ Power nap по умолчанию"), KeyboardButton(text="🔔 Напоминания")],
+        [KeyboardButton(text="🔒 Приватность и данные")],
+        [KeyboardButton(text="В меню")],
+      ],
+      resize_keyboard=True,
+    )
+
+  def timezone_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+      keyboard=[
+        [KeyboardButton(text="UTC"), KeyboardButton(text="Москва UTC+3")],
+        [KeyboardButton(text="Дубай UTC+4"), KeyboardButton(text="Ташкент UTC+5")],
+        [KeyboardButton(text="В меню"), KeyboardButton(text="Отменить сценарий")],
+      ],
+      resize_keyboard=True,
+    )
+
+  def target_sleep_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+      keyboard=[
+        [KeyboardButton(text="7 ч"), KeyboardButton(text="7.5 ч"), KeyboardButton(text="8 ч")],
+        [KeyboardButton(text="8.5 ч"), KeyboardButton(text="9 ч")],
+        [KeyboardButton(text="В меню"), KeyboardButton(text="Отменить сценарий")],
+      ],
+      resize_keyboard=True,
+    )
+
+  def nap_default_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+      keyboard=[
+        [KeyboardButton(text="10 мин"), KeyboardButton(text="15 мин"), KeyboardButton(text="20 мин")],
+        [KeyboardButton(text="В меню"), KeyboardButton(text="Отменить сценарий")],
+      ],
+      resize_keyboard=True,
+    )
+
+  def reminders_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+      keyboard=[
+        [KeyboardButton(text="🔕 Общие уведомления"), KeyboardButton(text="🌙 Вечерний отбой")],
+        [KeyboardButton(text="✅ Утренний check-in"), KeyboardButton(text="☀️ Дневное восстановление")],
+        [KeyboardButton(text="🎯 Фокус-перерыв"), KeyboardButton(text="⏱ Время напоминания")],
+        [KeyboardButton(text="В меню")],
+      ],
+      resize_keyboard=True,
+    )
+
   def has_enough_user_data(user) -> bool:
     try:
       history = services.history(user.id, 1)
@@ -217,6 +303,35 @@ async def run_aiogram_bot() -> None:
 
   def user_from_message(message: Message):
     return services.store.upsert_user(message.from_user.id, message.from_user.username if message.from_user else None)
+
+  def update_user_preferences(user, **changes):
+    updated_preferences = replace(user.preferences, **changes)
+    return services.store.update_preferences(user.id, updated_preferences)
+
+  async def send_audio_if_needed(message: Message, audio: AudioType) -> None:
+    file_names = {
+      AudioType.RAIN: "rain.wav",
+      AudioType.FOREST: "forest.wav",
+      AudioType.PINK_NOISE: "pink_noise.wav",
+    }
+    file_name = file_names.get(audio)
+    if file_name is None:
+      return
+
+    audio_path = Path(settings.content_path) / "audio" / file_name
+    if not audio_path.exists():
+      await message.answer(
+        "Аудиофайл пока не найден на сервере. Текстовый сценарий уже можно выполнить без аудио.",
+        reply_markup=menu_keyboard(),
+      )
+      return
+
+    captions = {
+      AudioType.RAIN: "Дождь для спокойного сопровождения сценария",
+      AudioType.FOREST: "Лесной фон для спокойного сопровождения сценария",
+      AudioType.PINK_NOISE: "Pink noise для спокойного сопровождения сценария",
+    }
+    await message.answer_audio(FSInputFile(audio_path), caption=captions.get(audio, "Аудиосопровождение"))
 
   async def require_premium(message: Message, feature_title: str) -> bool:
     user = user_from_message(message)
@@ -267,6 +382,105 @@ async def run_aiogram_bot() -> None:
   async def unknown_command(message: Message, state: FSMContext) -> None:
     await state.clear()
     await message.answer("Я не знаю такую команду. Вернул тебя в главное меню.", reply_markup=menu_keyboard())
+
+  @router.message(F.text == "✅ Release 2")
+  async def release2_status(message: Message) -> None:
+    user = user_from_message(message)
+    await message.answer(release2_service.release2_status_text(user.id), reply_markup=menu_keyboard())
+
+  @router.message(F.text == "🔁 Повторить последнее")
+  async def repeat_last_scenario(message: Message) -> None:
+    user = user_from_message(message)
+    await message.answer(release2_service.quick_repeat_text(user.id), reply_markup=menu_keyboard())
+
+  @router.message(F.text == "🎯 Концентрация")
+  async def concentration_start(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await state.set_state(ConcentrationFlow.minutes)
+    await message.answer(
+      "Сколько минут есть на восстановление концентрации? Выбери 5, 10 или 15.",
+      reply_markup=concentration_keyboard(),
+    )
+
+  @router.message(ConcentrationFlow.minutes)
+  async def concentration_minutes(message: Message, state: FSMContext) -> None:
+    value = _parse_int(message.text, 5, 15)
+    if value is None or value not in {5, 10, 15}:
+      await message.answer("Выбери 5, 10 или 15 минут.", reply_markup=concentration_keyboard())
+      return
+    await state.clear()
+    await message.answer(release2_service.concentration_text(value), reply_markup=menu_keyboard())
+
+  @router.message(F.text == "📆 Статистика по периодам")
+  async def period_stats_start(message: Message) -> None:
+    await message.answer("Выбери период статистики:", reply_markup=period_stats_keyboard())
+
+  @router.message(F.text == "7 дней")
+  async def period_stats_7(message: Message) -> None:
+    user = user_from_message(message)
+    await message.answer(release2_service.period_stats_text(user.id, 7), reply_markup=period_stats_keyboard())
+
+  @router.message(F.text == "30 дней")
+  async def period_stats_30(message: Message) -> None:
+    user = user_from_message(message)
+    await message.answer(release2_service.period_stats_text(user.id, 30), reply_markup=period_stats_keyboard())
+
+  @router.message(F.text == "⚖️ Сравнить сценарии")
+  async def compare_scenarios(message: Message) -> None:
+    user = user_from_message(message)
+    await message.answer(release2_service.scenario_comparison_text(user.id), reply_markup=period_stats_keyboard())
+
+  @router.message(F.text == "🔔 Напоминания")
+  async def reminders_settings(message: Message) -> None:
+    user = user_from_message(message)
+    await message.answer(release2_service.reminders_text(user.id), reply_markup=reminders_keyboard())
+
+  @router.message(F.text == "🔕 Общие уведомления")
+  async def toggle_notifications(message: Message) -> None:
+    user = user_from_message(message)
+    release2_service.toggle(user.id, "notifications_enabled")
+    await message.answer(release2_service.reminders_text(user.id), reply_markup=reminders_keyboard())
+
+  @router.message(F.text == "🌙 Вечерний отбой")
+  async def toggle_bedtime_reminder(message: Message) -> None:
+    user = user_from_message(message)
+    release2_service.toggle(user.id, "bedtime_reminder_enabled")
+    await message.answer(release2_service.reminders_text(user.id), reply_markup=reminders_keyboard())
+
+  @router.message(F.text == "✅ Утренний check-in")
+  async def toggle_wake_checkin(message: Message) -> None:
+    user = user_from_message(message)
+    release2_service.toggle(user.id, "wake_checkin_enabled")
+    await message.answer(release2_service.reminders_text(user.id), reply_markup=reminders_keyboard())
+
+  @router.message(F.text == "☀️ Дневное восстановление")
+  async def toggle_day_recovery(message: Message) -> None:
+    user = user_from_message(message)
+    release2_service.toggle(user.id, "day_recovery_enabled")
+    await message.answer(release2_service.reminders_text(user.id), reply_markup=reminders_keyboard())
+
+  @router.message(F.text == "🎯 Фокус-перерыв")
+  async def toggle_focus_reminder(message: Message) -> None:
+    user = user_from_message(message)
+    release2_service.toggle(user.id, "focus_reminder_enabled")
+    await message.answer(release2_service.reminders_text(user.id), reply_markup=reminders_keyboard())
+
+  @router.message(F.text == "⏱ Время напоминания")
+  async def reminder_time_start(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await state.set_state(SettingsFlow.reminder_time)
+    await message.answer("Во сколько напоминать про вечерний отбой? Напиши время в формате 22:30.", reply_markup=cancel_keyboard())
+
+  @router.message(SettingsFlow.reminder_time)
+  async def reminder_time_save(message: Message, state: FSMContext) -> None:
+    value = _parse_time_text(message.text)
+    if value is None:
+      await message.answer("Напиши время в формате 22:30.", reply_markup=cancel_keyboard())
+      return
+    user = user_from_message(message)
+    release2_service.set_reminder_time(user.id, value.strftime("%H:%M"))
+    await state.clear()
+    await message.answer(release2_service.reminders_text(user.id), reply_markup=reminders_keyboard())
 
   @router.message(F.text == "⭐ Premium")
   async def premium(message: Message) -> None:
@@ -452,10 +666,77 @@ async def run_aiogram_bot() -> None:
       "⚙️ Настройки\n\n"
       f"Часовой пояс: {prefs.timezone}\n"
       f"Язык: {prefs.language}\n"
-      f"Цель сна: {prefs.target_sleep_minutes // 60} ч {prefs.target_sleep_minutes % 60:02d} мин\n"
-      f"Power nap по умолчанию: {prefs.default_nap_duration} мин\n"
-      "\nНастройки можно менять через Swagger: PUT /users/{telegram_id}/profile",
-      reply_markup=menu_keyboard(),
+      f"Цель сна: {_format_hours(prefs.target_sleep_minutes)}\n"
+      f"Power nap по умолчанию: {prefs.default_nap_duration} мин\n\n"
+      "Что хочешь изменить?",
+      reply_markup=settings_keyboard(),
+    )
+
+  @router.message(F.text == "🌍 Часовой пояс")
+  async def timezone_start(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await state.set_state(SettingsFlow.timezone)
+    await message.answer("Выбери часовой пояс:", reply_markup=timezone_keyboard())
+
+  @router.message(SettingsFlow.timezone)
+  async def timezone_save(message: Message, state: FSMContext) -> None:
+    mapping = {
+      "utc": "UTC",
+      "москва utc+3": "Europe/Moscow",
+      "дубай utc+4": "Asia/Dubai",
+      "ташкент utc+5": "Asia/Tashkent",
+    }
+    value = mapping.get((message.text or "").strip().lower())
+    if value is None:
+      await message.answer("Выбери часовой пояс кнопкой ниже.", reply_markup=timezone_keyboard())
+      return
+    user = user_from_message(message)
+    update_user_preferences(user, timezone=value)
+    await state.clear()
+    await message.answer("Часовой пояс обновлён ✅", reply_markup=settings_keyboard())
+
+  @router.message(F.text == "🎯 Цель сна")
+  async def target_sleep_start(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await state.set_state(SettingsFlow.target_sleep)
+    await message.answer("Выбери целевую длительность сна:", reply_markup=target_sleep_keyboard())
+
+  @router.message(SettingsFlow.target_sleep)
+  async def target_sleep_save(message: Message, state: FSMContext) -> None:
+    value = _parse_sleep_hours(message.text, 6, 10)
+    if value is None:
+      await message.answer("Выбери 7, 7.5, 8, 8.5 или 9 часов.", reply_markup=target_sleep_keyboard())
+      return
+    user = user_from_message(message)
+    update_user_preferences(user, target_sleep_minutes=value)
+    await state.clear()
+    await message.answer(f"Цель сна обновлена: {_format_hours(value)} ✅", reply_markup=settings_keyboard())
+
+  @router.message(F.text == "⚡ Power nap по умолчанию")
+  async def nap_default_start(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await state.set_state(SettingsFlow.nap_duration)
+    await message.answer("Выбери длительность power nap по умолчанию:", reply_markup=nap_default_keyboard())
+
+  @router.message(SettingsFlow.nap_duration)
+  async def nap_default_save(message: Message, state: FSMContext) -> None:
+    value = _parse_int((message.text or "").replace("мин", "").strip(), 10, 20)
+    if value not in {10, 15, 20}:
+      await message.answer("Выбери 10, 15 или 20 минут.", reply_markup=nap_default_keyboard())
+      return
+    user = user_from_message(message)
+    update_user_preferences(user, default_nap_duration=value)
+    await state.clear()
+    await message.answer(f"Power nap по умолчанию: {value} мин ✅", reply_markup=settings_keyboard())
+
+  @router.message(F.text == "🔒 Приватность и данные")
+  async def privacy_settings(message: Message) -> None:
+    await message.answer(
+      "🔒 Приватность и данные\n\n"
+      "Sleepy хранит только данные, нужные для сценариев сна: настройки, check-in, историю рекомендаций и будильники.\n"
+      "Маркетинговое согласие отделено от базового использования.\n"
+      "Данные можно удалить через admin/API или при доработке добавить отдельную кнопку удаления в Telegram.",
+      reply_markup=settings_keyboard(),
     )
 
   @router.message(F.text == "⏰ Будильник")
@@ -755,6 +1036,7 @@ async def run_aiogram_bot() -> None:
     )
     await state.clear()
     await message.answer(recommendation_text(recommendation), reply_markup=menu_keyboard())
+    await send_audio_if_needed(message, audio)
 
   @router.message(F.text.regexp(r"^\d{4}$"))
   async def dismiss_alarm_by_code(message: Message, state: FSMContext) -> None:
@@ -849,6 +1131,15 @@ def _parse_int(text: str | None, min_value: int, max_value: int) -> int | None:
   if min_value <= value <= max_value:
     return value
   return None
+
+
+def _parse_time_text(text: str | None) -> time | None:
+  raw = (text or "").strip()
+  try:
+    parsed = time.fromisoformat(raw)
+  except ValueError:
+    return None
+  return parsed.replace(second=0, microsecond=0)
 
 
 def _parse_sleep_hours(text: str | None, min_hours: int, max_hours: int) -> int | None:
