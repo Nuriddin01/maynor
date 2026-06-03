@@ -68,12 +68,6 @@ python main.py --port 8080 --db local_data/demo.sqlite3
 - product analytics storage
 - Telegram polling, если задан `TELEGRAM_BOT_TOKEN`
 
-Чтобы запустить настоящего Telegram-бота, создай `.env` из `.env.example` и вставь токен от `@BotFather`:
-
-```env
-TELEGRAM_BOT_TOKEN=123456789:AA...
-```
-
 После этого достаточно одной команды:
 
 ```bash
