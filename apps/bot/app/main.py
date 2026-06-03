@@ -108,6 +108,7 @@ async def run_aiogram_bot() -> None:
         [KeyboardButton(text="📜 История"), KeyboardButton(text="⏰ Будильник")],
         [KeyboardButton(text="🔔 Напоминания"), KeyboardButton(text="⚙️ Настройки")],
         [KeyboardButton(text="⭐ Premium"), KeyboardButton(text="✅ Release 2")],
+        [KeyboardButton(text="📄 Документы")],
       ],
       resize_keyboard=True,
     )
@@ -226,7 +227,7 @@ async def run_aiogram_bot() -> None:
       keyboard=[
         [KeyboardButton(text="🌍 Часовой пояс"), KeyboardButton(text="🎯 Цель сна")],
         [KeyboardButton(text="⚡ Power nap по умолчанию"), KeyboardButton(text="🔔 Напоминания")],
-        [KeyboardButton(text="🔒 Приватность и данные")],
+        [KeyboardButton(text="🔒 Приватность и данные"), KeyboardButton(text="📄 Документы")],
         [KeyboardButton(text="В меню")],
       ],
       resize_keyboard=True,
@@ -271,6 +272,57 @@ async def run_aiogram_bot() -> None:
       ],
       resize_keyboard=True,
     )
+
+  def consent_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+      keyboard=[
+        [KeyboardButton(text="✅ Принять и продолжить")],
+        [KeyboardButton(text="📄 Документы")],
+        [KeyboardButton(text="❌ Не согласен")],
+      ],
+      resize_keyboard=True,
+    )
+
+  def legal_documents() -> list[tuple[str, Path]]:
+    base_path = Path(settings.content_path) / "legal"
+    return [
+      ("Пользовательское соглашение Sleepy", base_path / "01_user_agreement_sleepy.md"),
+      ("Политика обработки персональных данных Sleepy", base_path / "02_privacy_policy_sleepy.md"),
+      ("Согласие на обработку персональных данных Sleepy", base_path / "03_personal_data_consent_sleepy.md"),
+      ("Согласие на маркетинговые сообщения Sleepy", base_path / "04_marketing_consent_sleepy.md"),
+    ]
+
+  def has_required_consents(user) -> bool:
+    consents = tuple(services.store.consents.get(user.id, []))
+    return services.consent.can_use_core_product(consents)
+
+  def is_consent_command(text: str | None) -> bool:
+    normalized = (text or "").strip()
+    return normalized in {"✅ Принять и продолжить", "📄 Документы", "❌ Не согласен"}
+
+  async def send_consent_screen(message: Message) -> None:
+    await message.answer(
+      "👋 Добро пожаловать в Sleepy.\n\n"
+      "Перед началом нужно ознакомиться с документами и дать согласие на базовую обработку данных. "
+      "Это нужно, потому что бот хранит настройки сна, check-in, историю рекомендаций и будильники.\n\n"
+      "Команда /start сама по себе не означает согласие. "
+      "Согласие считается данным только после нажатия кнопки «✅ Принять и продолжить».\n\n"
+      "Бот не заменяет врача. Если проблемы со сном стали постоянными или сильно мешают жизни, обратитесь к специалисту.",
+      reply_markup=consent_keyboard(),
+    )
+
+  async def send_legal_documents(message: Message) -> None:
+    await message.answer(
+      "📄 Документы Sleepy\n\n"
+      "Перед использованием сервиса ознакомься с документами ниже. "
+      "Базовое согласие нужно для работы бота. Маркетинговое согласие отдельно и не требуется для использования Sleepy.",
+      reply_markup=consent_keyboard(),
+    )
+    for title, path in legal_documents():
+      if path.exists():
+        await message.answer_document(FSInputFile(path), caption=title)
+      else:
+        await message.answer(f"Документ временно не найден на сервере: {title}")
 
   def has_enough_user_data(user) -> bool:
     try:
@@ -364,9 +416,46 @@ async def run_aiogram_bot() -> None:
   async def start(message: Message, state: FSMContext) -> None:
     await state.clear()
     user = services.start_user(message.from_user.id, message.from_user.username if message.from_user else None)
+    if has_required_consents(user):
+      await message.answer(MAIN_MENU, reply_markup=menu_keyboard())
+      return
+    await send_consent_screen(message)
+
+  @router.message(F.text == "📄 Документы")
+  async def documents(message: Message) -> None:
+    await send_legal_documents(message)
+
+  @router.message(F.text == "✅ Принять и продолжить")
+  async def accept_required_documents(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    user = user_from_message(message)
     services.accept_consents(user.id)
-    await message.answer(CONSENT_TEXT)
-    await message.answer(MAIN_MENU, reply_markup=menu_keyboard())
+    services.analytics.track(AnalyticsEventName.STARTED_FLOW, user.id, {"source": "legal_acceptance"})
+    await message.answer(
+      "Спасибо. Согласие сохранено ✅\n\n"
+      "Теперь можно пользоваться Sleepy. Документы всегда доступны по кнопке «📄 Документы».\n\n"
+      "Выбери, что сейчас нужно:",
+      reply_markup=menu_keyboard(),
+    )
+
+  @router.message(F.text == "❌ Не согласен")
+  async def reject_required_documents(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await message.answer(
+      "Понимаю. Без базового согласия Sleepy не может сохранять настройки сна, историю и будильники, "
+      "поэтому функции бота недоступны.\n\n"
+      "Можно вернуться позже: нажми /start, открой документы и нажми «✅ Принять и продолжить», если согласишься.",
+      reply_markup=consent_keyboard(),
+    )
+
+  @router.message(lambda message: not is_consent_command(message.text) and not has_required_consents(user_from_message(message)))
+  async def consent_required_gate(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await message.answer(
+      "Сначала нужно ознакомиться с документами и дать базовое согласие. "
+      "После этого откроется главное меню.",
+      reply_markup=consent_keyboard(),
+    )
 
   @router.message(F.text == "В меню")
   async def show_menu(message: Message, state: FSMContext) -> None:
